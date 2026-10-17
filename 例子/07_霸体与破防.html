@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>07 霸体与破防 · 小例子</title>
+<style>
+:root{--bg:#2a1a14;--panel:#3a2519;--line:#5a3c2a;--txt:#fff4e6;--dim:#e0c3a6;--acc:#ffc83d;--ink:#1a1026}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 70% 0,#5a3524,var(--bg) 60%);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:3px solid var(--ink);box-shadow:0 6px 0 var(--ink);border-radius:14px;padding:14px}
+#stage{flex:1 1 480px;min-width:280px;max-width:980px}
+canvas{width:100%;border-radius:14px;display:block;border:3px solid var(--ink);box-shadow:0 6px 0 var(--ink)}
+h1{font-size:19px;margin:0 0 4px;font-weight:900;font-style:italic}
+h1 b{color:var(--acc)}
+h2{font-size:13px;color:var(--acc);margin:12px 0 2px;font-weight:900}
+.tip{color:var(--dim);font-size:12px;margin:0 0 6px}
+label{display:flex;gap:8px;align-items:flex-start;padding:2px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button{background:#5a3a26;color:#fff;border:2px solid var(--ink);border-radius:8px;padding:6px 10px;cursor:pointer;font-weight:800;box-shadow:0 3px 0 var(--ink)}
+button:hover{background:#6e4730}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+#ai{background:var(--acc);color:var(--ink)}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#pad{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+#pad button{flex:1;padding:12px 4px;touch-action:none;min-width:70px;font-size:14px}
+#pad button[data-k=j]{background:#4d8dff}#pad button[data-k=k]{background:#ff4d5e}#pad button[data-k=i]{background:#b07bff}#pad button[data-k=u]{background:#3fd46b;color:var(--ink)}#pad button[data-k=l]{background:#9fd3ff;color:var(--ink)}
+#stat{font-size:12px;color:var(--dim);background:rgba(0,0,0,.2);border-radius:8px;padding:6px 8px}
+@media(max-width:760px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>07 <b>霸体</b>与破防</h1>
+  <p class="tip">A/D 走　J 轻砍　K 重劈　I 连刺（一招 3 下）　U 抓　按住 L 格挡。<br>轻砍只能掉血（打断力 20 &lt; 韧性 30），重劈能打断它（45 &gt; 30）；Boss 身上冒金光时是霸体（韧性 80），重劈也劈不停。每砍一下，Boss 头顶会把两个数摆出来比给你看。</p>
+  <div class="row"><button id="ai">▶ 让 AI 一直重劈</button><button id="reset">重来</button></div>
+  <div id="stat"></div>
+  <h2>预设</h2>
+  <div class="row"><button data-p="good">推荐</button><button data-p="none">没有霸体</button><button data-p="inf">霸体无上限</button><button data-p="hide">看不见的霸体</button></div>
+  <h2>开关</h2>
+  <div id="toggles"></div>
+</div>
+<div id="stage"><canvas id="c"></canvas>
+  <div id="pad"><button data-k="a">← A</button><button data-k="d">D →</button><button data-k="j">轻砍 J</button><button data-k="k">重劈 K</button><button data-k="i">连刺 I</button><button data-k="u">抓 U</button><button data-k="l">挡 L</button></div>
+</div>
+
+<script>
+// ===================== 参数表：改这里（逻辑每秒 60 帧，距离单位 = 格） =====================
+const 参数 = {
+  基础韧性: 30,        // 平时
+  霸体韧性: 80,        // 出霸体招的那几帧
+  霸体上限: 2,         // 霸体最多吃几下，再挨一下就碎
+  我的招: {
+    轻: {出手: 5,  命中: 3, 收招: 14, 打断力: 20, 伤害: 10, 距离: 2.1},
+    重: {出手: 16, 命中: 4, 收招: 20, 打断力: 45, 伤害: 28, 距离: 2.3},
+    连: {出手: 6,  命中: 12, 收招: 16, 打断力: 15, 伤害: 6, 距离: 2.1, 段数: 3},  // 多段：一招打 3 下
+    抓: {出手: 6,  命中: 2, 收招: 26, 打断力: 999, 伤害: 22, 距离: 1.6, 抓: true},
+  },
+  Boss招: {
+    挥: {前摇: 30, 命中: 8, 收招: 30, 伤害: 10, 削: 25, 距离: 2.6, 霸体: false},
+    砸: {前摇: 40, 命中: 10, 收招: 40, 伤害: 30, 削: 50, 距离: 3.2, 霸体: true},
+  },
+  被打断后退: 0.5, 被打断愣: 24,
+  碎霸体愣: 50,
+  躯干满: 100, 躯干回复: 30,   // 每秒；不挡了 1 秒后开始回
+  破防愣: 90,
+  我的血: 300, Boss血: 600,
+};
+// ==========================================================================================
+
+const 项 = [
+  ['armor', '霸体', 'Boss 出大招那几帧韧性 30 → 80；关掉就会被重劈一直打断、大招永远出不来'],
+  ['cap', '有上限', '霸体吃 2 下，第 3 下碎；关掉就是无限霸体'],
+  ['see', '看得见', '脚下金色光阵 + 往上飘的光点 + 身上金光 + 头顶韧性表变金'],
+  ['grab', '抓取是钥匙', '霸体防打断，不防抓'],
+  ['multi', '多段是钥匙', '连刺一招打 3 下，正好把霸体吃满打碎'],
+  ['guard', '格挡要付代价（躯干条）', '挡一下涨一截，满了破防愣住；关掉就是免费格挡'],
+];
+const box = document.getElementById('toggles'), on = {};
+for (const [k, n, s] of 项) { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" data-k="${k}" checked><span>${n}<small>${s}</small></span>`; box.appendChild(l); }
+const 同步 = () => box.querySelectorAll('input').forEach(i => on[i.dataset.k] = i.checked);
+box.addEventListener('change', 同步); 同步();
+const 预设 = {good: {armor: 1, cap: 1, see: 1, grab: 1, multi: 1, guard: 1}, none: {armor: 0, cap: 1, see: 1, grab: 1, multi: 1, guard: 1}, inf: {armor: 1, cap: 0, see: 1, grab: 0, guard: 1}, hide: {armor: 1, cap: 1, see: 0, grab: 1, multi: 1, guard: 1}};
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const p = 预设[b.dataset.p]; box.querySelectorAll('input').forEach(i => i.checked = !!p[i.dataset.k]); 同步(); 重来(); });
+
+// ---------------- 状态 ----------------
+let 帧号, 我, 敌, 字, 碎片, 光点, 震, 计, 火花, 比较, AI = false;
+const 键 = {};
+function 重来() {
+  帧号 = 0; 字 = []; 碎片 = []; 光点 = []; 震 = 0; 火花 = []; 比较 = null;
+  我 = {x: 3, 血: 参数.我的血, 招: null, 段: '', 剩: 0, 已中: false, 挡: false, 躯干: 0, 不挡: 99, 愣: 0, 闪: 0, 起: 0, 步: 0, 走: 0, 破: false};
+  敌 = {x: 7, 血: 参数.Boss血, 招: null, 段: '走', 剩: 40, 霸体中: false, 吃下: 0, 愣: 0, 闪: 0, 序: 0, 光: 0, 步: 0, 走: 0, 段起: 0};
+  计 = {砸出: 0, 砸断: 0, 碎: 0, 破防: 0};
+}
+重来();
+addEventListener('keydown', e => { const k = e.key.toLowerCase(); 键[k] = true; if ('jkiu'.includes(k) && k.length === 1) 出手(k); });
+addEventListener('keyup', e => { 键[e.key.toLowerCase()] = false; });
+document.querySelectorAll('#pad button').forEach(b => {
+  b.onpointerdown = e => { e.preventDefault(); 键[b.dataset.k] = true; if ('jkiu'.includes(b.dataset.k)) 出手(b.dataset.k); };
+  b.onpointerup = b.onpointerleave = () => 键[b.dataset.k] = false;
+});
+document.getElementById('reset').onclick = 重来;
+const AI钮 = document.getElementById('ai');
+AI钮.onclick = () => { AI = !AI; AI钮.textContent = AI ? '■ 停 AI' : '▶ 让 AI 一直重劈'; };
+if (location.hash === '#ai') AI钮.onclick();   // 网址后面加 #ai，打开就让 AI 开打
+const 招名 = {j: '轻', k: '重', i: '连', u: '抓'};
+function 出手(k) {
+  if (我.招 || 我.愣 > 0) return;
+  const z = 参数.我的招[招名[k]];
+  if ((z.抓 && !on.grab) || (z.段数 && !on.multi)) return;
+  我.招 = z; 我.键 = 招名[k]; 我.段 = '出'; 我.剩 = z.出手; 我.已中 = false; 我.中次 = 0; 我.起 = 帧号;
+}
+function 飘(文, x, y, 色, 大) { 字.push({文, x, y, 色, 帧: 帧号, 大}); }
+
+// 当前韧性：霸体招的前摇和命中帧里临时调高
+const 韧性 = () => 敌.霸体中 ? 参数.霸体韧性 : 参数.基础韧性;
+
+function 我打中(z) {
+  敌.血 = Math.max(0, 敌.血 - z.伤害);
+  飘(z.伤害, 敌.x + 1.1, 3.6, '#fff');
+  const 韧 = 韧性(), 霸 = 敌.霸体中;
+  const 花 = (hue, big) => 火花.push({x: X(敌.x) - 34, y: 地 - 190, 帧: 帧号, big, hue, seed: 帧号 % 97});
+  if (z.抓 || z.打断力 > 韧) { 比较 = {力: z.抓 ? '抓' : z.打断力, 韧, 霸, 果: z.抓 ? '抓住' : '断', 帧: 帧号}; 花('#62d4ff', 1.1); 打断敌(z.抓 ? '抓住了！' : '打断！'); return; }
+  // 打不断：只掉血、出火花；霸体中才记次数
+  if (!霸) { 比较 = {力: z.打断力, 韧, 霸, 果: '打不动', 帧: 帧号}; 花('#ffffff', 0.5); return; }
+  敌.吃下++;
+  花('#ffd23f', 0.8);
+  for (let i = 0; i < 8; i++) 碎片.push({x: 敌.x - 0.6, y: 3.2, vx: -Math.random() * 6, vy: (Math.random() - 0.3) * 6, 命: 0.25, 色: '#ffe9a0'});
+  if (on.cap && 敌.吃下 > 参数.霸体上限) {
+    计.碎++; 震 = 0.8; 比较 = {力: z.打断力, 韧, 霸, 果: '碎', 帧: 帧号};
+    for (let i = 0; i < 30; i++) 碎片.push({x: 敌.x, y: 3, vx: (Math.random() - 0.5) * 12, vy: Math.random() * 9, 命: 0.8, 色: '#ffcc33', 片: 1, 转: Math.random() * 6});
+    打断敌(null, 参数.碎霸体愣);
+  } else 比较 = {力: z.打断力, 韧, 霸, 果: '扛住', 帧: 帧号};
+}
+function 打断敌(说, 愣 = 参数.被打断愣) {
+  if (敌.段 === '愣' && 说 !== '抓住了！') return;  // 已经在愣，不重新算（不然一直轻砍能把它锁死）
+  if (敌.招 && 敌.招.霸体 && 敌.段 === '前摇') 计.砸断++;  // 大招还没砸下来就被打断
+  敌.招 = null; 敌.段 = '愣'; 敌.剩 = 愣; 敌.愣总 = 愣; 敌.霸体中 = false; 敌.吃下 = 0; 敌.闪 = 6; 敌.段起 = 帧号;
+  敌.x = Math.min(10.5, 敌.x + 参数.被打断后退);
+  if (说) 飘(说, 敌.x, 5.6, '#7cf0ff', 1);
+}
+function 敌打中(z) {
+  if (我.挡 && 我.愣 <= 0) {
+    飘('挡', 我.x + 0.6, 3.6, '#9fd0ff'); 我.挡闪 = 帧号;
+    if (on.guard) { 我.躯干 += z.削; 我.不挡 = 0; if (我.躯干 >= 参数.躯干满) { 我.躯干 = 0; 我.愣 = 参数.破防愣; 我.破 = true; 我.挡 = false; 计.破防++; 飘('破防！', 我.x, 4.6, '#ff5a6a', 1); 震 = 0.6; } }
+    return;
+  }
+  我.血 = Math.max(0, 我.血 - z.伤害); 我.闪 = 6; 我.招 = null; 我.愣 = Math.max(我.愣, 12); 我.挨 = 帧号;
+  我.x = Math.max(0.5, 我.x - 0.6); 飘(z.伤害, 我.x, 3.8, '#ff5a6a'); 震 = Math.max(震, z.霸体 ? 0.7 : 0.3);
+  火花.push({x: X(我.x) + 20, y: 地 - 170, 帧: 帧号, big: z.霸体 ? 1.3 : 0.8, hue: '#ff6b3b', seed: 帧号 % 89});
+}
+
+// ---------------- 每帧 ----------------
+function 一帧() {
+  帧号++;
+  const 我旧x = 我.x, 敌旧x = 敌.x;
+  if (AI) { if (Math.abs(敌.x - 我.x) > 1.9) 我.x += 0.08; else 出手('k'); }
+  // 我
+  if (我.愣 > 0) 我.愣--; else 我.破 = false;
+  我.挡 = !!键.l && !我.招 && 我.愣 <= 0;
+  if (!我.招 && 我.愣 <= 0 && !我.挡) { if (键.a) 我.x -= 0.08; if (键.d) 我.x += 0.08; }
+  我.x = Math.max(0.5, Math.min(敌.x - 1.3, 我.x));
+  if (!我.挡) { 我.不挡++; if (我.不挡 > 60) 我.躯干 = Math.max(0, 我.躯干 - 参数.躯干回复 / 60); }
+  if (我.招) {
+    我.剩--;
+    if (我.段 === '出' && 我.剩 <= 0) { 我.段 = '中'; 我.剩 = 我.招.命中; }
+    if (我.段 === '中') {
+      const 段 = 我.招.段数 || 1, 间 = Math.floor(我.招.命中 / 段), 过 = 我.招.命中 - 我.剩;  // 多段招每隔几帧打一下
+      if (我.中次 < 段 && 过 >= 我.中次 * 间 && 敌.x - 我.x <= 我.招.距离) { 我.中次++; 我.已中 = true; 我打中(我.招); } if (我.剩 <= 0) { 我.段 = '收'; 我.剩 = 我.招.收招; } }
+    else if (我.段 === '收' && 我.剩 <= 0) 我.招 = null;
+  }
+  // Boss：走近 → 挥 / 砸 交替（砸的那一下带霸体）
+  敌.剩--;
+  const 段前 = 敌.段;
+  if (敌.段 === '走') { if (敌.x - 我.x > 2.2) 敌.x -= 0.03; if (敌.剩 <= 0) { const z = 敌.序++ % 2 ? 参数.Boss招.砸 : 参数.Boss招.挥; 敌.招 = z; 敌.段 = '前摇'; 敌.剩 = z.前摇; 敌.吃下 = 0; 敌.霸体中 = on.armor && z.霸体; } }
+  else if (敌.段 === '前摇' && 敌.剩 <= 0) { 敌.段 = '命中'; 敌.剩 = 敌.招.命中; 敌.已中 = false; 敌.霸体中 = false; if (敌.招.霸体) { 计.砸出++; 震 = Math.max(震, 0.5); } }
+  else if (敌.段 === '命中') { if (!敌.已中 && 敌.x - 我.x <= 敌.招.距离) { 敌.已中 = true; 敌打中(敌.招); } if (敌.剩 <= 0) { 敌.段 = '收'; 敌.剩 = 敌.招.收招; 敌.霸体中 = false; } }
+  else if ((敌.段 === '收' || 敌.段 === '愣') && 敌.剩 <= 0) { 敌.剩 = 敌.段 === '愣' ? 8 : 我.愣 > 30 ? 4 : 50; 敌.招 = null; 敌.段 = '走'; }  // 你破防了，它马上再来一下
+  if (敌.段 !== 段前) { 敌.段起 = 帧号; 敌.段长 = Math.max(1, 敌.剩); }
+  // 霸体光：蓄得越久越亮
+  敌.光 = 敌.霸体中 ? Math.min(1, 敌.光 + 1 / 40) : Math.max(0, 敌.光 - 0.08);
+  if (on.see && 敌.霸体中 && 帧号 % 3 === 0) 光点.push({x: 敌.x + (Math.random() - 0.5) * 2.2, y: 0, vy: 2 + Math.random() * 2, 命: 1, s: 2 + Math.random() * 3});
+  for (const p of 碎片) { p.x += p.vx / 60; p.y += p.vy / 60; p.vy -= 20 / 60; p.命 -= 1 / 60; }
+  for (const p of 光点) { p.y += p.vy / 60; p.命 -= 1 / 60; }
+  碎片 = 碎片.filter(p => p.命 > 0 && p.y > -0.2); 光点 = 光点.filter(p => p.命 > 0); 字 = 字.filter(z => 帧号 - z.帧 < 50);
+  if (我.闪) 我.闪--; if (敌.闪) 敌.闪--;
+  我.走 = Math.abs(我.x - 我旧x) > 0.001 ? 1 : 0; 我.步 += (我.x - 我旧x) * 2.2;
+  敌.走 = Math.abs(敌.x - 敌旧x) > 0.001 ? 1 : 0; 敌.步 -= (敌.x - 敌旧x) * 2.2;
+  震 *= 0.88;
+  if (敌.血 <= 0 || 我.血 <= 0) { 飘(敌.血 <= 0 ? 'Boss 倒下' : '你倒下了', 5, 6, '#fff', 1); 敌.血 = 参数.Boss血; 我.血 = 参数.我的血; }
+}
+
+const INK = '#1a1026', GOLD = '#ffc83d';
+const L = {torso: 108, neck: 14, uarm: 72, farm: 66, thigh: 100, shin: 98};
+const STANCE = {rx: 0, ry: 184, rot: 0, lean: 8, head: -4, fh: [64, 24], bh: [34, -8], ff: [58, 0], bf: [-60, 0], face: 'calm'};
+const P = o => ({...STANCE, ...o});
+const CROUCH = P({ry: 142, lean: 24, fh: [54, 16], bh: [30, -12], ff: [62, 0], bf: [-62, 0]});
+// 每招的关键姿势：[第几帧, 姿势]（脸朝右）
+const 动作 = {
+  jab: [[0, {}], [2, {fh: [70, 20], lean: 10}], [4, {fh: [136, 26], lean: 18, rx: 12, head: -2, bh: [26, -4], ff: [66, 0], face: 'shout'}], [7, {fh: [130, 24], lean: 16, rx: 10, face: 'shout'}], [12, {}]],
+  heavy: [[0, {}], [4, {lean: -2, rx: -8, ry: 178, bh: [-12, -26], fh: [60, 30]}], [7, {lean: 16, rx: 18, bh: [70, 6], fh: [40, 10], ff: [90, 0]}],
+    [8, {lean: 30, rx: 34, ry: 172, bh: [138, 20], fh: [18, -12], ff: [104, 0], bf: [-64, 0], face: 'shout'}], [15, {lean: 28, rx: 32, ry: 172, bh: [132, 18], fh: [18, -12], ff: [104, 0], face: 'shout'}], [28, {}]],
+  rush: [[0, {}], [3, {...CROUCH, lean: 32, ry: 156, fh: [40, -4], bh: [6, -24], ff: [80, 0], bf: [-86, 0]}],
+    [9, {lean: 40, ry: 150, rx: 30, fh: [138, 8], bh: [-30, -34], ff: [124, 0], bf: [-74, 0], face: 'shout'}], [15, {lean: 36, ry: 152, rx: 28, fh: [132, 8], bh: [-26, -30], ff: [120, 0], bf: [-74, 0], face: 'shout'}], [23, {}]],
+  upper: [[0, {}], [3, {...CROUCH, ry: 138, lean: 28, fh: [26, -54], bh: [26, -10]}],
+    [6, {ry: 232, rx: 12, lean: -10, head: -14, fh: [26, 136], bh: [-34, -24], ff: [34, 92], bf: [-22, 8], face: 'shout'}],
+    [14, {ry: 226, rx: 12, lean: -8, head: -10, fh: [24, 132], bh: [-30, -22], ff: [34, 88], bf: [-22, 6], face: 'shout'}], [24, {}]],
+};
+const 动作峰 = {jab: 4, heavy: 8, rush: 9, upper: 6}, 动作末 = {jab: 12, heavy: 28, rush: 23, upper: 24};
+const 挨打 = {
+  high: {lean: -26, head: -30, rx: -14, ry: 180, fh: [-8, -44], bh: [-52, 6], face: 'hurt'},
+  body: {lean: 40, head: 22, rx: -10, ry: 158, fh: [12, -62], bh: [2, -70], ff: [52, 0], bf: [-66, 0], face: 'hurt'},
+  heavy: {lean: -40, head: -22, rx: -30, ry: 174, fh: [-60, 22], bh: [-82, 40], bf: [-92, 0], face: 'hurt'},
+};
+const 空中姿 = P({lean: -18, head: -26, fh: [-40, 64], bh: [-74, 84], ff: [36, 70], bf: [-28, 36], face: 'hurt'});
+const ease = k => { const c = Math.min(1, Math.max(0, k)); return c * c * (3 - 2 * c); };
+const 混 = (a, b, k) => {
+  const o = {face: k < 0.5 ? a.face : b.face};
+  for (const n of ['rx', 'ry', 'rot', 'lean', 'head']) o[n] = a[n] + (b[n] - a[n]) * k;
+  for (const n of ['fh', 'bh', 'ff', 'bf']) o[n] = [a[n][0] + (b[n][0] - a[n][0]) * k, a[n][1] + (b[n][1] - a[n][1]) * k];
+  return o;
+};
+const 播 = (keys, f) => {
+  if (f <= keys[0][0]) return P(keys[0][1]);
+  for (let i = 0; i < keys.length - 1; i++) { const [f0, a] = keys[i], [f1, b] = keys[i + 1]; if (f <= f1) return 混(P(a), P(b), ease((f - f0) / (f1 - f0))); }
+  return P(keys[keys.length - 1][1]);
+};
+const 呼吸 = (p, t) => ({...p, ry: p.ry + Math.sin(t * 4.2) * 2.5, lean: p.lean + Math.sin(t * 4.2 + 1) * 1.2});
+
+const ik = (h, a, l1, l2, side) => {
+  const dx = a.x - h.x, dy = a.y - h.y, d = Math.hypot(dx, dy) || 1e-3;
+  const dc = Math.min(d, l1 + l2 - 0.5), ux = dx / d, uy = dy / d;
+  const aa = (l1 * l1 - l2 * l2 + dc * dc) / (2 * dc), hh = Math.sqrt(Math.max(0, l1 * l1 - aa * aa));
+  return [{x: h.x + ux * aa - uy * side * hh, y: h.y + uy * aa + ux * side * hh}, {x: h.x + ux * dc, y: h.y + uy * dc}];
+};
+const rad = d => d * Math.PI / 180;
+function 关节(p, sc) {
+  const H = {x: p.rx, y: p.ry}, la = rad(p.lean), t = {x: Math.sin(la), y: Math.cos(la)}, n = {x: Math.cos(la), y: -Math.sin(la)};
+  const at = (o, a, b) => ({x: o.x + n.x * a + t.x * b, y: o.y + n.y * a + t.y * b});
+  const S = at(H, 0, L.torso * sc), N = at(S, 0, L.neck * sc), ha = rad(p.lean + p.head), C = {x: N.x + Math.sin(ha) * 30 * sc, y: N.y + Math.cos(ha) * 30 * sc};
+  const Sf = at(S, 4 * sc, -2 * sc), Sb = at(S, -10 * sc, -4 * sc);
+  const [Ef, Wf] = ik(Sf, at(Sf, p.fh[0] * sc, p.fh[1] * sc), L.uarm * sc, L.farm * sc, -1);
+  const [Eb, Wb] = ik(Sb, at(Sb, p.bh[0] * sc, p.bh[1] * sc), L.uarm * sc, L.farm * sc, -1);
+  const Hf = {x: H.x + 4 * sc, y: H.y}, Hb = {x: H.x - 8 * sc, y: H.y};
+  const [Kf, Af] = ik(Hf, {x: p.ff[0] * sc, y: p.ff[1] * sc + 10 * sc}, L.thigh * sc, L.shin * sc, 1);
+  const [Kb, Ab] = ik(Hb, {x: p.bf[0] * sc, y: p.bf[1] * sc + 10 * sc}, L.thigh * sc, L.shin * sc, 1);
+  const J = {H, S, N, C, Sf, Sb, Ef, Wf, Eb, Wb, Hf, Hb, Kf, Af, Kb, Ab, t, n};
+  if (p.rot) {
+    const r = rad(p.rot), c = Math.cos(r), s = Math.sin(r);
+    for (const k of Object.keys(J)) { const q = J[k], dir = k === 't' || k === 'n', ox = dir ? 0 : H.x, oy = dir ? 0 : H.y, x = q.x - ox, y = q.y - oy; J[k] = {x: ox + x * c + y * s, y: oy - x * s + y * c}; }
+  }
+  J.headAng = p.lean + p.head + p.rot;
+  return J;
+}
+
+// 两个角色的配色
+const 主角 = {skin: '#ffd5b6', skinS: '#e9a283', hair: '#2b2142', hairH: '#6a5aa8', top: '#f0482c', topS: '#b3281b', trim: '#ffcf4a', pants: '#3e3756', pantsS: '#262039',
+  hand: '#f7f2ea', handS: '#cfc4b4', shoe: '#f3efe6', shoeS: '#b9b0a2', band: '#e5243a', bandS: '#9c1226', belt: '#2b2142', iris: '#8a2c18', big: 1, coat: 0, hero: 1};
+const 对手 = {skin: '#f4d0bb', skinS: '#d29a84', hair: '#eef1fb', hairH: '#ffffff', top: '#2f64e3', topS: '#1b3a9e', trim: '#9fe8ff', pants: '#ebe7f4', pantsS: '#b2abc9',
+  hand: '#2b2142', handS: '#150f24', shoe: '#2b2142', shoeS: '#150f24', band: '#16c9c6', bandS: '#0b8a8a', belt: '#150f24', iris: '#1f72b8', big: 1.06, coat: 1, hero: 0};
+
+const pts = a => a.map(q => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' L');
+const 胶囊 = (p0, p1, w0, w1) => {   // 两头圆的一段手脚
+  const dx = p1.x - p0.x, dy = p1.y - p0.y, d = Math.hypot(dx, dy) || 1e-3, ux = dx / d, uy = dy / d, nx = -uy, ny = ux, k = 1.33;
+  const a0 = {x: p0.x + nx * w0, y: p0.y + ny * w0}, a1 = {x: p1.x + nx * w1, y: p1.y + ny * w1}, b1 = {x: p1.x - nx * w1, y: p1.y - ny * w1}, b0 = {x: p0.x - nx * w0, y: p0.y - ny * w0};
+  return `M${a0.x},${a0.y} L${a1.x},${a1.y} C${a1.x + ux * w1 * k},${a1.y + uy * w1 * k} ${b1.x + ux * w1 * k},${b1.y + uy * w1 * k} ${b1.x},${b1.y} L${b0.x},${b0.y} C${b0.x - ux * w0 * k},${b0.y - uy * w0 * k} ${a0.x - ux * w0 * k},${a0.y - uy * w0 * k} ${a0.x},${a0.y} Z`;
+};
+const 暗面 = (p0, p1, w0, w1) => {   // 暗面偏向右下（光从左上来）
+  const dx = p1.x - p0.x, dy = p1.y - p0.y, d = Math.hypot(dx, dy) || 1e-3, nx = -dy / d, ny = dx / d, s = nx * 0.6 + ny * 0.8 > 0 ? 1 : -1, o0 = w0 * 0.42 * s, o1 = w1 * 0.42 * s;
+  return 胶囊({x: p0.x + nx * o0, y: p0.y + ny * o0}, {x: p1.x + nx * o1, y: p1.y + ny * o1}, w0 * 0.56, w1 * 0.56);
+};
+const 圆滑 = a => {   // 平滑闭合曲线（Catmull-Rom）
+  const n = a.length; let d = `M${a[0].x},${a[0].y}`;
+  for (let i = 0; i < n; i++) { const p0 = a[(i - 1 + n) % n], p1 = a[i], p2 = a[(i + 1) % n], p3 = a[(i + 2) % n]; d += ` C${p1.x + (p2.x - p0.x) / 6},${p1.y + (p2.y - p0.y) / 6} ${p2.x - (p3.x - p1.x) / 6},${p2.y - (p3.y - p1.y) / 6} ${p2.x},${p2.y}`; }
+  return d + ' Z';
+};
+const 飘带 = (c, w0, w1) => {
+  const A = [], B = [];
+  c.forEach((p, i) => { const q = c[Math.min(c.length - 1, i + 1)], o = c[Math.max(0, i - 1)], dx = q.x - o.x, dy = q.y - o.y, d = Math.hypot(dx, dy) || 1, w = w0 + (w1 - w0) * (i / (c.length - 1)); A.push({x: p.x - dy / d * w, y: p.y + dx / d * w}); B.push({x: p.x + dy / d * w, y: p.y - dx / d * w}); });
+  return `M${pts(A)} L${pts(B.reverse())} Z`;
+};
+let g;   // 画布
+const 填 = (d, c) => { g.fillStyle = c; g.fill(new Path2D(d)); };
+const 描 = (d, w, c = INK) => { g.strokeStyle = c; g.lineWidth = w; g.lineJoin = 'round'; g.lineCap = 'round'; g.stroke(new Path2D(d)); };
+const 手脚 = (a, b, w0, w1, c, cs, sw) => { const d = 胶囊(a, b, w0, w1); 填(d, c); 填(暗面(a, b, w0, w1), cs); 描(d, sw); };
+
+// 头（自己的坐标：y 朝下、脸朝右，半径约 36）
+function 画头(k, face, t) {
+  const blink = !['hurt', 'ko', 'shout'].includes(face) && t % 3.7 < 0.09;
+  const 眼 = (x, y, s) => {
+    if (face === 'hurt') return 描(`M${x - 7 * s},${y - 5} L${x + 4 * s},${y} L${x - 7 * s},${y + 4}`, 4);
+    if (blink) return 描(`M${x - 8 * s},${y} L${x + 8 * s},${y - 1}`, 4);
+    const w = face === 'shout' ? 1.15 : 1;
+    const d = `M${x - 8 * s},${y} C${x - 4 * s},${y - 7 * w} ${x + 6 * s},${y - 7 * w} ${x + 8 * s},${y - 2} C${x + 4 * s},${y + 5 * w} ${x - 4 * s},${y + 5 * w} ${x - 8 * s},${y} Z`;
+    填(d, '#fff'); 描(d, 2.5);
+    g.fillStyle = k.iris; g.beginPath(); g.ellipse(x + 2 * s, y - 0.5, 3.6 * s, 4.6 * w, 0, 0, 7); g.fill();
+    g.fillStyle = INK; g.beginPath(); g.ellipse(x + 2.4 * s, y - 0.5, 1.8 * s, 2.6 * w, 0, 0, 7); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(x + 3.5 * s, y - 2.6, 1.3, 0, 7); g.fill();
+    描(`M${x - 9 * s},${y - 1} C${x - 4 * s},${y - 8.5 * w} ${x + 6 * s},${y - 8.5 * w} ${x + 9 * s},${y - 3}`, 4.5);
+  };
+  const 后发 = k.hero ? 'M4,-40 L-30,-52 L-24,-36 L-58,-38 L-40,-20 L-68,-10 L-44,-2 L-62,16 L-36,12 L-42,32 L-20,22 L-14,36 L-2,16 Z'
+    : 'M8,-40 C-30,-50 -70,-30 -96,4 L-70,-2 L-104,30 L-74,22 L-96,56 L-60,36 L-60,62 L-36,40 L-26,56 L-12,30 L-2,14 Z';
+  const 前发 = k.hero ? 'M-32,-6 C-34,-36 -6,-50 16,-46 C34,-42 44,-28 40,-10 L36,-18 L34,-4 L26,-18 L20,-2 L12,-18 L4,-6 L0,-20 L-10,-8 L-14,-22 L-26,-6 Z'
+    : 'M-32,-4 C-34,-38 -2,-52 20,-46 C38,-40 44,-26 42,-12 L32,-20 L36,-2 L22,-16 L14,4 L8,-14 L-6,-6 L-16,-22 L-26,-2 Z';
+  const 脸 = 'M-30,-8 C-32,-34 -6,-44 12,-40 C30,-36 40,-18 38,4 C37,16 32,26 22,36 C16,41 8,42 0,38 C-14,32 -26,20 -30,-8 Z';
+  填(后发, k.hair); 描(后发, 4);
+  填(脸, k.skin); 填('M-30,-8 C-28,12 -16,30 0,38 C-4,24 -10,10 -12,-6 Z', k.skinS); 描(脸, 4);
+  g.fillStyle = k.skin; g.beginPath(); g.ellipse(-8, 6, 7, 9, 0, 0, 7); g.fill(); g.lineWidth = 3; g.strokeStyle = INK; g.stroke();
+  眼(15, 2, 1); 眼(31, 1, 0.55);
+  描(face === 'hurt' ? 'M8,-14 L22,-10 M28,-11 L36,-14' : 'M6,-16 L22,-10 M27,-11 L37,-15', 4.5);
+  描('M37,8 L40,14 L36,15', 2.5);
+  if (face === 'shout') { 填('M21,19 L35,16 L33,30 L23,30 Z', '#7a1022'); 描('M21,19 L35,16 L33,30 L23,30 Z', 2.5); }
+  else if (face === 'hurt') { 填('M20,22 L27,18 L34,22 L32,29 L22,29 Z', '#7a1022'); 描('M20,22 L27,18 L34,22 L32,29 L22,29 Z', 2.5); 填('M-16,-30 C-12,-24 -10,-20 -14,-16 C-18,-20 -18,-24 -16,-30 Z', '#bfe8ff'); 描('M-16,-30 C-12,-24 -10,-20 -14,-16 C-18,-20 -18,-24 -16,-30 Z', 2); }
+  else 描('M22,24 L33,22', 3);
+  填(前发, k.hair); 描(前发, 4);
+  g.globalAlpha = 0.8; 描(k.hero ? 'M-14,-38 C-2,-44 12,-44 22,-40' : 'M-12,-40 C2,-46 16,-44 26,-38', 4, k.hairH); g.globalAlpha = 1;
+  if (k.hero && k.头带 !== 0) { const d = 'M-33,-14 C-10,-22 18,-24 41,-18 L41,-9 C18,-15 -10,-13 -33,-5 Z'; 填(d, k.band); 描(d, 3.5); }
+}
+function 画拳(k) { const d = 'M-6,-4 Q-6,-13 3,-13 L15,-13 Q24,-13 24,-4 L24,4 Q24,13 15,13 L3,13 Q-6,13 -6,4 Z'; 填(d, k.hand); 描('M6,-12 L6,12 M14,-12 L14,12', 3, k.handS); 描(d, 4); }
+function 画鞋(k) { const d = 'M-12,-10 C-6,-16 10,-14 20,-8 C34,-4 42,2 40,10 L-14,10 C-18,4 -16,-4 -12,-10 Z'; 填(d, k.shoe); 填('M-14,10 L40,10 L38,4 L-16,4 Z', k.shoeS); 描(d, 4); }
+const 角 = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+
+// 一个人。ox, oy = 脚下那一点在画面上的位置；z = 缩放；face = 1 朝右、-1 朝左；vel = 每帧位移（飘带往反方向飘）
+// 剑角 = 剑身比前臂往上翘多少（弧度），只有 k.剑 时用
+function 画人(pose, k, ox, oy, z, face, t, vel, flash, 剑角 = 1.1) {
+  const sc = k.big, J = 关节(pose, sc);
+  const S = p => ({x: ox + face * p.x * z, y: oy - p.y * z}), sw = 5.5 * z;
+  const lim = (a, b, w0, w1, c, cs) => 手脚(S(a), S(b), w0 * z * sc, w1 * z * sc, c, cs, sw);
+  const H = J.H, n = J.n, tt = J.t;
+  const at = (o, a, b) => ({x: o.x + n.x * a * sc + tt.x * b * sc, y: o.y + n.y * a * sc + tt.y * b * sc});
+  const body = [at(H, 25, -6), at(H, 22, 36), at(H, 34, 78), at(J.S, 22, -4), at(J.S, -4, 12), at(J.S, -28, -2), at(H, -32, 74), at(H, -24, 34), at(H, -28, -6)].map(S);
+  const shade = [at(J.S, -28, -2), at(H, -32, 74), at(H, -24, 34), at(H, -28, -6), at(H, -8, -6), at(H, -8, 38), at(H, -12, 76), at(J.S, -10, 0)].map(S);
+  const belt = [at(H, 25, 4), at(H, 24, 16), at(H, -28, 16), at(H, -28, 4)].map(S);
+  const drag = (base, i, back, down, droop, wav, ph) => ({
+    x: base.x - face * back * i * z - vel.x * i * 1.6 + Math.sin(t * 9 - i * 0.9 + ph) * wav * i * z,
+    y: base.y + down * i * z + droop * i * i * z * 0.5 - vel.y * i * 1.2 + Math.cos(t * 7 - i * 0.8 + ph) * wav * 0.6 * i * z,
+  });
+  const chain = (base, cnt, back, down, droop, wav, ph) => Array.from({length: cnt}, (_, i) => drag(base, i, back, down, droop, wav, ph));
+  const hipBack = S(at(H, -26, 2)), hem = k.coat ? chain(hipBack, 7, 7, 17, 0.6, 1.4, 0.4) : chain(hipBack, 4, 6, 9, 0.6, 1.0, 0.4);
+  const front = S(at(H, 22, 2)), mid = S(at(H, k.coat ? 8 : 0, k.coat ? -96 : -30)), last = hem[hem.length - 1];
+  const hemPath = `M${front.x},${front.y} L${mid.x},${mid.y} Q${(mid.x + last.x) / 2},${mid.y + 8 * z} ${last.x},${last.y + 6 * z} L${pts(hem.slice().reverse())} Z`;
+  const knot = S(at(J.N, -12, 18));
+  const tails = k.hero ? [chain(knot, 7, 13, 0, 1.4, 2.2, 0), chain({x: knot.x, y: knot.y + 5 * z}, 6, 12, 1, 1.8, 2.6, 1.7)] : [chain(S(at(J.S, -14, 6)), 9, 15, 2, 1.6, 2.4, 0.6), chain(S(at(J.S, -10, 2)), 7, 14, 4, 2.0, 2.8, 2.2)];
+  const tf = (p, a, sx, fn) => { g.save(); g.translate(p.x, p.y); g.rotate(a); g.scale(sx * z * sc, z * sc); fn(); g.restore(); };
+  g.save();
+  if (flash > 0) g.filter = `brightness(${1 + flash * 1.6}) saturate(${1 - flash * 0.7})`;
+  tails.forEach((c, i) => { const d = 飘带(c, (k.hero ? 5 : 9) * z, (k.hero ? 3 : 6) * z); 填(d, i ? k.bandS : k.band); 描(d, 3.5 * z); });
+  填(hemPath, k.topS); 描(hemPath, sw);
+  lim(J.Sb, J.Eb, 15, 13, k.top, k.topS);
+  lim(J.Eb, J.Wb, 12.5, 11, k.coat ? k.top : k.skin, k.coat ? k.topS : k.skinS);
+  tf(S(J.Wb), 角(S(J.Eb), S(J.Wb)), 1, () => 画拳(k));
+  lim(J.Hb, J.Kb, 24, 18, k.pants, k.pantsS); lim(J.Kb, J.Ab, 18, 12, k.pants, k.pantsS);
+  tf(S(J.Ab), 角(S(J.Kb), S(J.Ab)) - face * Math.PI / 2, face, () => 画鞋(k));
+  填(圆滑(body), k.top); 填(圆滑(shade), k.topS); 填(`M${pts(belt)} Z`, k.belt); 描(圆滑(body), sw);
+  描(`M${pts([S(at(J.S, 16, -2)), S(at(J.S, 2, -34)), S(at(J.S, -8, 2))])}`, 6 * z, k.trim);
+  lim(J.Hf, J.Kf, 25, 19, k.pants, k.pantsS); lim(J.Kf, J.Af, 19, 13, k.pants, k.pantsS);
+  tf(S(J.Af), 角(S(J.Kf), S(J.Af)) - face * Math.PI / 2, face, () => 画鞋(k));
+  lim(J.S, J.N, 11, 11, k.skin, k.skinS);
+  tf(S(J.C), face * rad(J.headAng), face, () => 画头(k, pose.face, t));
+  lim(J.Sf, J.Ef, 16, 13.5, k.top, k.topS);
+  lim(J.Ef, J.Wf, 13, 11.5, k.coat ? k.top : k.skin, k.coat ? k.topS : k.skinS);
+  if (k.剑) {   // 剑：从拳心伸出去，细长、带护手
+    const w = S(J.Wf), a = 角(S(J.Ef), w) - face * 剑角, ca = Math.cos(a), sa = Math.sin(a), 长 = 150 * z * sc;
+    const px = -sa, py = ca, b = 3.2 * z, tip = {x: w.x + ca * 长, y: w.y + sa * 长};
+    const d = `M${w.x + px * b},${w.y + py * b} L${tip.x - ca * 14 * z + px * b},${tip.y - sa * 14 * z + py * b} L${tip.x},${tip.y} L${tip.x - ca * 14 * z - px * b},${tip.y - sa * 14 * z - py * b} L${w.x - px * b},${w.y - py * b} Z`;
+    填(d, '#e9eef8'); 描(d, 2.5 * z);
+    描(`M${w.x + ca * 16 * z + px * 11 * z},${w.y + sa * 16 * z + py * 11 * z} L${w.x + ca * 16 * z - px * 11 * z},${w.y + sa * 16 * z - py * 11 * z}`, 6 * z, '#d6a43a');
+  }
+  tf(S(J.Wf), 角(S(J.Ef), S(J.Wf)), 1, () => 画拳(k));
+  g.restore();
+  return {前拳: S(J.Wf), 后拳: S(J.Wb), 头: S(J.C)};
+}
+
+
+
+// ---------------- 两个人的样子 ----------------
+const 剑客 = {skin: '#ffd9bf', skinS: '#e7a888', hair: '#221a3a', hairH: '#5a4c8e', top: '#2b2838', topS: '#16141f', trim: '#e5243a', pants: '#22202d', pantsS: '#121019',
+  hand: '#2b2838', handS: '#16141f', shoe: '#22202d', shoeS: '#0f0d16', band: '#e5243a', bandS: '#9c1226', belt: '#e5243a', iris: '#3a2c6a', big: 1, coat: 0, hero: 1, 头带: 0, 剑: 1};
+const 头目 = {skin: '#f4d6c4', skinS: '#cf9c86', hair: '#f3f4fb', hairH: '#ffffff', top: '#4a3088', topS: '#2c1b5c', trim: '#ffd23f', pants: '#3a2670', pantsS: '#241650',
+  hand: '#2b2142', handS: '#150f24', shoe: '#2b2142', shoeS: '#150f24', band: '#4a3088', bandS: '#2c1b5c', belt: '#1a1030', iris: '#c0306a', big: 1.3, coat: 1, hero: 0};
+
+// 姿势（脸朝右写；j = 剑比前臂往上翘多少弧度）
+const 姿 = o => ({...STANCE, j: 1.1, ...o});
+const 混2 = (a, b, k) => ({...混(a, b, k), j: (a.j ?? 1.1) + ((b.j ?? 1.1) - (a.j ?? 1.1)) * k});
+const 我站 = 姿({fh: [52, 30], bh: [30, -10], lean: 6});
+const 我招姿 = {
+  轻: [姿({fh: [34, 44], lean: 2, j: 1.4}), 姿({fh: [140, 22], lean: 18, rx: 14, ff: [72, 0], face: 'shout', j: 0.1})],
+  重: [姿({fh: [8, 128], bh: [10, 90], lean: -8, ry: 190, j: 1.9, face: 'grit'}), 姿({fh: [128, -16], bh: [70, -20], lean: 30, rx: 24, ry: 168, ff: [96, 0], face: 'shout', j: -0.2})],
+  连: [姿({fh: [30, 20], lean: 4, j: 0.2}), 姿({fh: [146, 20], lean: 20, rx: 16, ff: [76, 0], face: 'shout', j: 0.05})],
+  抓: [姿({fh: [40, 10], bh: [30, 0], lean: 10, j: 1.5}), 姿({fh: [118, 34], bh: [104, 20], lean: 24, rx: 22, ff: [84, 0], face: 'shout', j: 1.6})],
+};
+const 我挡 = 姿({fh: [44, 56], bh: [40, 30], lean: -6, ry: 176, head: -10, ff: [70, 0], bf: [-70, 0], face: 'grit', j: 1.55});
+const 我破 = 姿({ry: 122, lean: 30, head: 16, fh: [30, -40], bh: [4, -50], ff: [62, 0], bf: [-44, 0], face: 'hurt', j: 0.6});
+const 敌站 = 姿({fh: [50, 10], bh: [30, -10], ff: [64, 0], bf: [-70, 0], lean: 4, face: 'calm'});
+const 敌招姿 = {
+  挥: [姿({lean: -8, rx: -12, ry: 178, fh: [-30, 70], bh: [-40, 20], face: 'grit'}), 姿({lean: 24, rx: 26, ry: 172, fh: [146, 6], bh: [20, -20], ff: [100, 0], face: 'shout'})],
+  砸: [姿({ry: 198, lean: -16, head: -16, fh: [26, 172], bh: [4, 170], ff: [52, 0], bf: [-70, 0], face: 'grit'}), 姿({ry: 146, lean: 40, rx: 30, head: 14, fh: [122, -62], bh: [100, -72], ff: [104, 0], bf: [-84, 0], face: 'shout'})],
+};
+const 走 = (p, 步, 有) => 有 ? {...p, ff: [p.ff[0] + Math.sin(步) * 26, Math.max(0, Math.cos(步)) * 22], bf: [p.bf[0] - Math.sin(步) * 26, Math.max(0, -Math.cos(步)) * 22], ry: p.ry + Math.abs(Math.cos(步)) * 4} : p;
+function 我姿势(t) {
+  if (我.破 && 我.愣 > 0) return 我破;
+  if (我.愣 > 0 && 帧号 - (我.挨 || -99) < 16) return 混2(我站, 姿(挨打.high), 1 - (帧号 - 我.挨) / 16);
+  if (我.挡) return 我挡;
+  if (!我.招) return 走(呼吸(我站, t), 我.步, 我.走);
+  const [起, 打] = 我招姿[我.键], z = 我.招, f = 帧号 - 我.起;
+  if (我.键 === '连' && 我.段 !== '出') {   // 连刺：一招里来回刺 3 下
+    if (我.段 === '中') { const 间 = z.命中 / 3, k = (f - z.出手) % 间 / 间; return 混2(起, 打, k < 0.5 ? ease(k * 2) : 1 - ease((k - 0.5) * 2) * 0.6); }
+    return 混2(打, 我站, ease((f - z.出手 - z.命中) / z.收招));
+  }
+  if (我.段 === '出') return 混2(我站, 起, ease(f / z.出手));
+  if (我.段 === '中') return 混2(起, 打, ease((f - z.出手 + 1) / 3));
+  return 混2(打, 我站, ease((f - z.出手 - z.命中) / z.收招));
+}
+function 敌姿势(t) {
+  const f = 帧号 - 敌.段起, 长 = 敌.段长 || 1;
+  if (敌.段 === '愣') { const r = 姿(挨打.heavy), k = f / (敌.愣总 || 24); return 混2(混2(敌站, r, Math.min(1, (f + 0.5) / 2.5)), 敌站, ease((k - 0.6) / 0.4)); }
+  if (!敌.招) return 走(呼吸(敌站, t), 敌.步, 敌.走);
+  const [起, 打] = 敌招姿[敌.招.霸体 ? '砸' : '挥'];
+  if (敌.段 === '前摇') return 混2(敌站, 起, ease(f / 长 * 1.4));
+  if (敌.段 === '命中') return 混2(起, 打, ease((f + 1) / 3));
+  return 混2(打, 敌站, ease(f / 长));
+}
+
+// ---------------- 特效 ----------------
+function 画火花(s, age) {   // 星形白芯 + 彩色外圈 + 射线 + 碎屑（age = 第几帧）
+  if (age < 0 || age > 16) return;
+  const {x, y, big, hue, seed} = s, k = age / 16, pop = age < 2 ? 0.7 + age * 0.3 : 1.3 - k * 0.5, R = 60 * big * pop;
+  const star = (r0, r1, n, rot) => 'M' + Array.from({length: n * 2}, (_, i) => { const a = rot + i * Math.PI / n, r = i % 2 ? r0 : r1 * (0.75 + 0.5 * rnd(seed + i)); return `${(x + Math.cos(a) * r).toFixed(1)},${(y + Math.sin(a) * r).toFixed(1)}`; }).join(' L') + ' Z';
+  g.globalAlpha = age > 10 ? 1 - (age - 10) / 6 : 1;
+  if (age < 9) { const d = star(R * 0.32, R * 1.25, 9, seed); 填(d, hue); 描(d, 3); }
+  if (age < 7) 填(star(R * 0.22, R * 0.85, 7, seed + 0.4), '#fff8d8');
+  if (age < 3) { g.fillStyle = '#fff'; g.beginPath(); g.arc(x, y, R * 0.42, 0, 7); g.fill(); }
+  g.globalAlpha *= 1 - k; g.strokeStyle = '#fff'; g.lineWidth = 7 * (1 - k) * big; g.beginPath(); g.arc(x, y, R * (0.6 + k * 1.3), 0, 7); g.stroke();
+  g.globalAlpha = age > 10 ? 1 - (age - 10) / 6 : 1;
+  for (let i = 0; i < 9; i++) {
+    const a = i / 9 * Math.PI * 2 + seed, sp = (0.7 + rnd(seed * 9 + i)) * R * 2.1 * (0.3 + k), l = 17 * big * (1 - k), bx = x + Math.cos(a) * sp, by = y + Math.sin(a) * sp;
+    g.strokeStyle = i % 2 ? '#fff' : hue; g.lineWidth = 4 * big; g.lineCap = 'round'; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + Math.cos(a) * l, by + Math.sin(a) * l); g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+function 画集中线(x, y, k, seed) {   // 漫画大招的集中线
+  if (k <= 0) return;
+  g.globalAlpha = k * 0.75; g.fillStyle = '#fff';
+  for (let i = 0; i < 46; i++) {
+    const a = i / 46 * Math.PI * 2 + rnd(seed + i) * 0.1, r0 = 190 + rnd(i * 3 + seed) * 130, w = 0.012 + rnd(i * 7) * 0.02;
+    g.beginPath(); g.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0); g.lineTo(x + Math.cos(a - w) * 1000, y + Math.sin(a - w) * 1000); g.lineTo(x + Math.cos(a + w) * 1000, y + Math.sin(a + w) * 1000); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+function 画拖影(p, w, col) {   // 拳头这几帧走过的点连成渐细的月牙
+  if (p.length < 2) return;
+  const A = [], B = [];
+  p.forEach((q, i) => { const o = p[Math.max(0, i - 1)], r = p[Math.min(p.length - 1, i + 1)], dx = r.x - o.x, dy = r.y - o.y, d = Math.hypot(dx, dy) || 1, ww = w * (i / (p.length - 1)); A.push({x: q.x - dy / d * ww, y: q.y + dx / d * ww}); B.push({x: q.x + dy / d * ww, y: q.y - dx / d * ww}); });
+  g.globalAlpha = 0.85; 填(`M${pts(A)} L${pts(B.reverse())} Z`, col); g.globalAlpha = 1;
+}
+function 描字(文, x, y, 号, 色, 宽 = 号 * 0.16, 对齐 = 'center', 斜 = 0) {   // 白字粗黑边（视频里的字）
+  g.save(); g.translate(x, y); if (斜) g.rotate(斜);
+  g.font = `italic 900 ${号}px system-ui,'PingFang SC','Microsoft YaHei',sans-serif`; g.textAlign = 对齐; g.textBaseline = 'alphabetic';
+  g.lineJoin = 'round'; g.strokeStyle = INK; g.lineWidth = 宽; g.strokeText(文, 0, 0); g.fillStyle = 色; g.fillText(文, 0, 0); g.restore();
+}
+function 圆角(x, y, w, h, r) { g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, r) : g.rect(x, y, w, h); }
+
+
+
+// ---------------- 舞台：黄昏荒原 ----------------
+const W = 960, H = 540, 地 = 440, 格 = 76, 人z = 0.6;
+const X = x => 40 + x * 格, Y = y => 地 - y * 58;
+const rnd = i => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * dpr; cv.height = H * dpr; g = cv.getContext('2d');
+let 远景 = document.createElement('canvas'); 远景.width = W; 远景.height = H;
+{ const c = 远景.getContext('2d');
+  const sky = c.createLinearGradient(0, 0, 0, 地); sky.addColorStop(0, '#f9e6cf'); sky.addColorStop(0.65, '#f5cfa6'); sky.addColorStop(1, '#eeb486');
+  c.fillStyle = sky; c.fillRect(0, 0, W, 地);
+  const sun = c.createRadialGradient(700, 地 - 40, 0, 700, 地 - 40, 260); sun.addColorStop(0, 'rgba(255,240,200,.9)'); sun.addColorStop(1, 'rgba(255,240,200,0)');
+  c.fillStyle = sun; c.fillRect(0, 0, W, 地);
+  const 丘 = (base, amp, seed, col) => { c.fillStyle = col; c.beginPath(); c.moveTo(0, 地); for (let x = 0; x <= W; x += 8) c.lineTo(x, 地 - base - amp * (0.5 + 0.5 * Math.sin(x / 140 + seed) * Math.sin(x / 61 + seed * 2))); c.lineTo(W, 地); c.fill(); };
+  丘(34, 30, 1, 'rgba(232,170,128,.55)'); 丘(14, 18, 4, 'rgba(214,146,104,.6)');
+  const gr = c.createLinearGradient(0, 地, 0, H); gr.addColorStop(0, '#a5734f'); gr.addColorStop(1, '#8a5c3f');
+  c.fillStyle = gr; c.fillRect(0, 地, W, H - 地);
+  c.fillStyle = '#7a4f34'; c.fillRect(0, 地, W, 4);
+  c.fillStyle = 'rgba(255,220,180,.12)'; for (let i = 0; i < 60; i++) c.fillRect(rnd(i) * W, 地 + 8 + rnd(i + 9) * (H - 地 - 10), 10 + rnd(i + 3) * 40, 2);
+}
+
+function 量表(x, y, 值, 色, 名, 字色 = INK) {   // 竖着的小量表：框 + 往上涨的色块 + 数字
+  const w = 40, h = 64;
+  g.fillStyle = '#6d6470'; 圆角(x - w / 2, y, w, h, 6); g.fill(); g.strokeStyle = INK; g.lineWidth = 3; g.stroke();
+  const f = Math.min(1, 值 / 100) * (h - 8); g.fillStyle = 色; 圆角(x - w / 2 + 4, y + h - 4 - f, w - 8, f, 3); g.fill();
+  描字(String(值), x, y + h - 4 - f - 6, 26, 色, 5);
+  描字(名, x, y + h + 18, 14, '#fff', 4);
+}
+function 画() {
+  const t = 帧号 / 60;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.translate(Math.sin(帧号 * 1.7) * 震 * 12, Math.cos(帧号 * 2.3) * 震 * 9);
+  g.drawImage(远景, 0, 0, W, H);
+  const 我X = X(我.x), 敌X = X(敌.x) + (敌.段 === '前摇' ? Math.min(1, (帧号 - 敌.段起) / 20) * 12 : 0);
+  // 影子
+  g.fillStyle = 'rgba(70,35,15,.28)';
+  g.beginPath(); g.ellipse(我X, 地 + 3, 44, 8, 0, 0, 7); g.fill(); g.beginPath(); g.ellipse(敌X, 地 + 3, 62, 10, 0, 0, 7); g.fill();
+  // 霸体：地上的金色光阵 + 身后的金光
+  if (on.see && 敌.光 > 0) {
+    const k = 敌.光;
+    g.save();   // 天是亮的，用叠加会看不出来，直接盖一层金色
+    const au = g.createRadialGradient(敌X, 地 - 150, 10, 敌X, 地 - 150, 150 + 40 * k); au.addColorStop(0, `rgba(255,190,40,${0.6 * k})`); au.addColorStop(0.55, `rgba(255,200,60,${0.3 * k})`); au.addColorStop(1, 'rgba(255,190,60,0)');
+    g.fillStyle = au; g.fillRect(敌X - 220, 地 - 340, 440, 360);
+    g.restore();
+    g.save(); g.globalAlpha = 0.5 + 0.5 * k;
+    g.strokeStyle = '#ffd23f'; g.lineWidth = 4; g.beginPath(); g.ellipse(敌X, 地 + 2, 60 + 50 * k, 12 + 8 * k, 0, 0, 7); g.stroke();
+    g.strokeStyle = '#fff3b0'; g.lineWidth = 2; g.beginPath(); g.ellipse(敌X, 地 + 2, (60 + 50 * k) * 0.72, (12 + 8 * k) * 0.72, 0, 0, 7); g.stroke();
+    g.globalAlpha *= 0.35; g.fillStyle = '#ffcc33'; g.beginPath(); g.ellipse(敌X, 地 + 2, 60 + 50 * k, 12 + 8 * k, 0, 0, 7); g.fill();
+    g.restore();
+  }
+  for (const p of 光点) { g.globalAlpha = p.命; g.fillStyle = '#ffe27a'; g.beginPath(); g.arc(X(p.x), Y(p.y), p.s, 0, 7); g.fill(); }
+  g.globalAlpha = 1;
+  const 敌光 = on.see && 敌.光 > 0 ? 敌.光 * 0.35 : 0;
+  const 敌画 = 画人(敌姿势(t), 头目, 敌X, 地, 人z, -1, t + 1.3, {x: 0, y: 0}, Math.max(敌.闪 / 6, 敌光));
+  const 我p = 我姿势(t);
+  画人(我p, 剑客, 我X, 地, 人z, 1, t, {x: 我.走 ? 1.5 : 0, y: 0}, 我.闪 / 6, 我p.j);
+  // 格挡的蓝色护盾一闪
+  if (帧号 - (我.挡闪 || -99) < 12) {
+    const a = (帧号 - 我.挡闪) / 12, r = (40 + 26 * a), cx = 我X + 48, cy = 地 - 150;
+    const hex = 'M' + Array.from({length: 6}, (_, i) => `${cx + Math.cos(i * Math.PI / 3) * r},${cy + Math.sin(i * Math.PI / 3) * r * 1.3}`).join(' L') + ' Z';
+    g.globalAlpha = 1 - a; 填(hex, 'rgba(120,220,255,.35)'); 描(hex, 6, '#bff3ff'); 描(hex, 2); g.globalAlpha = 1;
+  }
+  for (const s of 火花) 画火花(s, 帧号 - s.帧);
+  火花 = 火花.filter(s => 帧号 - s.帧 <= 16);
+  for (const p of 碎片) {
+    g.globalAlpha = Math.min(1, p.命 * 3); const x = X(p.x), y = Y(p.y);
+    if (p.片) { const s = 9; g.save(); g.translate(x, y); g.rotate(p.转 + 帧号 * 0.2); 填(`M0,${-s} L${s * 0.6},0 L0,${s} L${-s * 0.6},0 Z`, p.色); 描(`M0,${-s} L${s * 0.6},0 L0,${s} L${-s * 0.6},0 Z`, 2); g.restore(); }
+    else { g.fillStyle = p.色; g.fillRect(x - 2, y - 2, 4, 4); }
+  }
+  g.globalAlpha = 1;
+  // 头顶：Boss 的韧性（看得见时才有）+ 霸体还能扛几下 + 刚才那一下的打断力
+  if (on.see) {
+    const hx = 敌X + 10, hy = Math.min(敌画.头.y - 150, 120);
+    const 显 = 比较 && 帧号 - 比较.帧 < 70 ? 比较.韧 : 韧性();   // 刚挨一下时，表上停在挨打那一刻的韧性
+    量表(hx, hy, 显, 显 > 参数.基础韧性 ? '#ffd23f' : '#ece8f2', 'Boss 的韧性');
+    if (敌.霸体中 && on.cap) for (let i = 0; i < 参数.霸体上限; i++) {
+      const cx = hx - 12 + i * 24, cy = hy - 22, d = `M${cx},${cy - 10} L${cx + 9},${cy} L${cx},${cy + 10} L${cx - 9},${cy} Z`;
+      填(d, i < 参数.霸体上限 - 敌.吃下 ? '#ffd23f' : 'rgba(255,255,255,.35)'); 描(d, 3);
+    }
+    if (比较 && 帧号 - 比较.帧 < 70) {
+      const a = (帧号 - 比较.帧) / 70; g.globalAlpha = Math.min(1, (1 - a) * 4);
+      const lx = hx - 150;
+      if (比较.力 === '抓') 描字('抓', lx, hy + 44, 40, '#5cff8a', 7);
+      else 量表(lx, hy, 比较.力, '#9fd3ff', '这一下的打断力');
+      const 赢 = 比较.果 === '断' || 比较.果 === '碎' || 比较.果 === '抓住';
+      if (比较.力 !== '抓') 描字(比较.力 > 比较.韧 ? '>' : '<', (lx + hx) / 2, hy + 44, 36, 赢 ? '#ff5a6a' : '#fff', 7);
+      const 文 = {断: '断', 碎: '第 3 下 · 碎！', 抓住: '霸体不防抓', 扛住: `扛住第 ${敌.吃下} 下`, 打不动: '只掉血'}[比较.果];
+      描字(文, hx + 46, hy + 16, 比较.果 === '断' ? 40 : 24, 赢 ? '#ff5a6a' : '#fff', 赢 ? 7 : 5, 'left');
+      g.globalAlpha = 1;
+    }
+  }
+  for (const z of 字) { const a = (帧号 - z.帧) / 50; g.globalAlpha = Math.min(1, (1 - a) * 2); 描字(z.文, X(z.x), Y(z.y) - a * 30, z.大 ? 30 : 22, z.色, 6); }
+  g.globalAlpha = 1;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // 地上：两边血条 + 你的躯干条
+  const 条 = (x, y, w, h, 比, 色) => { g.fillStyle = 'rgba(30,14,8,.7)'; 圆角(x, y, w, h, h / 2); g.fill(); g.fillStyle = 色; 圆角(x, y, Math.max(h, w * Math.max(0, Math.min(1, 比))), h, h / 2); if (比 > 0) g.fill(); g.strokeStyle = INK; g.lineWidth = 3; 圆角(x, y, w, h, h / 2); g.stroke(); };
+  描字('你', 22, 474, 18, '#fff', 4, 'left'); 条(50, 460, 300, 18, 我.血 / 参数.我的血, '#5cdc7a');
+  if (on.guard) { 描字('躯干', 22, 506, 15, '#fff', 4, 'left'); 条(62, 494, 288, 13, 我.躯干 / 参数.躯干满, 我.躯干 > 70 ? '#ff6b3b' : '#ffd23f'); }
+  描字('Boss', W - 330, 474, 18, '#fff', 4, 'right'); 条(W - 320, 460, 300, 18, 敌.血 / 参数.Boss血, '#ff4d5e');
+  document.getElementById('stat').textContent = `大招砸出来 ${计.砸出} 次 · 被打断 ${计.砸断} 次 · 霸体被打碎 ${计.碎} 次 · 你破防 ${计.破防} 次`;
+}
+let 上 = performance.now(), 累 = 0;
+function 循环(now) { 累 += Math.max(0, Math.min(0.1, (now - 上) / 1000)); 上 = now; while (累 >= 1 / 60) { 累 -= 1 / 60; 一帧(); } 画(); requestAnimationFrame(循环); }
+requestAnimationFrame(循环);
+</script>
+</body>
+</html>

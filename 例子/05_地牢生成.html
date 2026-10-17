@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>05 地牢生成 · 小例子</title>
+<style>
+:root{--bg:#0a0910;--panel:#16131f;--line:#3a3348;--txt:#efe9f7;--dim:#a49cb4;--acc:#ffc84a}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 65% 0,#2a2130,var(--bg) 60%);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:1px solid var(--line);box-shadow:0 0 18px rgba(255,190,110,.12);border-radius:12px;padding:14px}
+#stage{flex:1 1 420px;min-width:280px;max-width:860px}
+canvas{width:100%;border-radius:12px;display:block;border:1px solid var(--line);box-shadow:0 0 30px rgba(255,190,110,.18)}
+h1{font-size:18px;margin:0 0 4px;font-weight:900}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+button{background:#241f30;color:var(--txt);border:1px solid #6a5a3a;border-radius:8px;padding:5px 10px;cursor:pointer;font-weight:700}
+button:hover{border-color:var(--acc);box-shadow:0 0 10px rgba(255,200,74,.45)}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+ol{padding-left:20px;margin:8px 0;font-size:13px}
+li{padding:2px 0;color:var(--dim)}
+li.now{color:#ffd88a;font-weight:700}
+li.done{color:#9fd0a8}
+#say{background:#0d0b12;border:1px solid #2a2436;border-radius:8px;padding:8px;font-size:13px;min-height:60px}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>05 地牢：钥匙为什么总在最偏的房间</h1>
+  <p class="tip">看一个地牢从一块石头里长出来，再看 AI 自己通关。</p>
+  <div class="row"><button id="next">下一步</button><button id="auto">自动播放</button><button id="again">换一张</button></div>
+  <ol id="steps"></ol>
+  <div id="say"></div>
+  <p class="tip">种子：<span id="seed"></span>（同一个种子永远生成同一张图）</p>
+</div>
+<div id="stage"><canvas id="c" width="816" height="576"></canvas></div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 参数 = {
+  宽: 51, 高: 36,          // 格
+  最小切块: 16,            // 一块地比这个小就不再切（横竖各自判断）
+  最深切几刀: 5,
+  提前停切: 0.12,          // 切到第 3 刀以后，每块有这么大概率不再切（房间大小更随机）
+  洞穴初始实心: 0.55,       // 洞穴：先随机撒点
+  洞穴迭代: 5,             // 再反复「周围 8 格里 ≥5 格是地 → 变地；≤3 → 变墙」
+  多留回路: 2,             // 连成一棵树以后，再多加几条走廊，让地图有回路
+  回路最长: 30,
+  每房怪物: [1, 5],         // 越深越多：1 + 深度 × 4
+  陷阱数: 7,
+  陷阱代价: 12,            // A* 走陷阱格要多花这么多步 → 能绕就绕
+  怪物代价: 4,             // 挡路的怪就打过去（代价小于绕远路时）
+};
+// ===========================================================
+
+const 步骤名 = ['切房间：一刀一刀随机切开', '每块里挖一个房间', '走廊连起来（先连成一棵树，再多留两条回路）', '最大那块长成洞穴', '起点、首领、门锁、钥匙', '越深越难：怪物、陷阱、宝箱', 'AI 用 A 星寻路通关'];
+const 解说 = [
+  '把一整块石头一刀一刀切开，每一刀的位置都随机。块太小就不切了。',
+  '每一块里挖一个大小不一的房间，四周留边，房间之间就不会粘在一起。',
+  '按房间之间的距离，从近到远连走廊；已经连通的就跳过（这样连成一棵树，保证每个房间都走得到）。再故意多留两条回路，不然只有一条路，太闷。',
+  '最大的一块不挖成方的：随机撒点，然后反复看周围 8 格，多数是地就变地，多数是墙就变墙。几轮以后就长成了自然的洞穴，最后只留最大的那一片。',
+  '最关键：首领放在离起点最远的房间，门口上锁；钥匙藏在门外最偏的地方（离起点远、离门也远）。这样玩家必须先拿钥匙，等于把整个地牢走一遍。',
+  '离起点越深，房间里的怪越多；只连一条走廊的死胡同里放宝箱（奖励走进去的人）；走廊里埋陷阱。',
+  'A 星寻路：每走一步都估算「已经走了多远 + 离目标还有多远」，挑最划算的格子先试。蓝色是它试探过的格子，金色是最后选中的路。陷阱代价高，能绕就绕；挡路的怪物代价低，直接打过去。先拿钥匙，回头开门，最后挑战首领。',
+];
+const ul = document.getElementById('steps');
+步骤名.forEach(n => { const li = document.createElement('li'); li.textContent = n; ul.appendChild(li); });
+
+// 可重复的随机数（同一个种子同一张图）
+function 随机器(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const 整 = (r, a, b) => a + Math.floor(r() * (b - a + 1));
+
+let 图, 当前 = -1, 自动 = null;
+function 生成(seed) {
+  const r = 随机器(seed), W = 参数.宽, H = 参数.高;
+  const 格 = Array.from({length: H}, () => new Array(W).fill(0)); // 0 墙 1 房间 2 走廊 3 洞穴
+  // 1. 切房间（BSP）
+  const 刀 = [], 块 = [];
+  (function 切(x, y, w, h, 深) {
+    const 能横 = h >= 参数.最小切块, 能竖 = w >= 参数.最小切块;
+    if (深 > 参数.最深切几刀 || !(能横 || 能竖) || (深 > 2 && r() < 参数.提前停切)) { 块.push({x, y, w, h}); return; }
+    const 横 = 能横 && (!能竖 || h / w > 1.1 || (h / w > 0.8 && r() < 0.5));
+    if (横) { const c = 整(r, y + 8, y + h - 8); 刀.push([x, c, x + w, c]); 切(x, y, w, c - y, 深 + 1); 切(x, c, w, y + h - c, 深 + 1); }
+    else { const c = 整(r, x + 8, x + w - 8); 刀.push([c, y, c, y + h]); 切(x, y, c - x, h, 深 + 1); 切(c, y, x + w - c, h, 深 + 1); }
+  })(1, 1, W - 2, H - 2, 0);
+  // 2. 挖房间（最大的一块留给洞穴）
+  let 洞i = 0; 块.forEach((b, i) => { if (b.w * b.h * (0.5 + r()) > 块[洞i].w * 块[洞i].h * 0.9) 洞i = i; });
+  const 房 = 块.map((b, i) => {
+    if (i === 洞i) return {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: b.h - 2, 洞: true};
+    const rw = 整(r, Math.max(4, b.w >> 1), b.w - 2), rh = 整(r, Math.max(4, b.h >> 1), b.h - 2);
+    return {x: 整(r, b.x + 1, b.x + b.w - rw - 1), y: 整(r, b.y + 1, b.y + b.h - rh - 1), w: rw, h: rh, 洞: false};
+  });
+  房.forEach(f => { if (!f.洞) for (let y = f.y; y < f.y + f.h; y++) for (let x = f.x; x < f.x + f.w; x++) 格[y][x] = 1; });
+  const 挖房后 = 格.map(row => row.slice());
+  // 3. 洞穴：细胞自动机
+  const 洞 = 房[洞i], 洞步 = [];
+  let c = Array.from({length: 洞.h}, () => Array.from({length: 洞.w}, () => (r() < 参数.洞穴初始实心 ? 1 : 0)));
+  洞步.push(c);
+  for (let k = 0; k < 参数.洞穴迭代; k++) {
+    const n = c.map((row, y) => row.map((v, x) => { let s = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dy || dx) && c[y + dy] && c[y + dy][x + dx]) s++; return s >= 5 ? 1 : s <= 3 ? 0 : v; }));
+    c = n; 洞步.push(c);
+  }
+  // 只留最大的一片
+  const 标 = c.map(row => row.map(() => 0)); let 最大标 = 0, 最大数 = 0, 标号 = 0;
+  for (let y = 0; y < 洞.h; y++) for (let x = 0; x < 洞.w; x++) if (c[y][x] && !标[y][x]) {
+    标号++; let 数 = 0; const q = [[y, x]]; 标[y][x] = 标号;
+    while (q.length) { const [a, b] = q.pop(); 数++; for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const p = a + dy, s = b + dx; if (c[p] && c[p][s] && !标[p][s]) { 标[p][s] = 标号; q.push([p, s]); } } }
+    if (数 > 最大数) { 最大数 = 数; 最大标 = 标号; }
+  }
+  c = 标.map(row => row.map(v => (v === 最大标 ? 1 : 0))); 洞步.push(c);
+  for (let y = 0; y < 洞.h; y++) for (let x = 0; x < 洞.w; x++) if (c[y][x]) 格[洞.y + y][洞.x + x] = 3;
+  // 房间中心（洞穴取离几何中心最近的地格）
+  const 心 = 房.map(f => {
+    if (!f.洞) return [f.y + (f.h >> 1), f.x + (f.w >> 1)];
+    let best = null, bd = 1e9; for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) if (c[y][x]) { const d = Math.abs(y - f.h / 2) + Math.abs(x - f.w / 2); if (d < bd) { bd = d; best = [f.y + y, f.x + x]; } } return best;
+  });
+  // 4. 走廊：按距离从近到远，并查集连成树，再多留两条回路
+  const 对 = []; for (let a = 0; a < 房.length; a++) for (let b = a + 1; b < 房.length; b++) 对.push([Math.abs(心[a][0] - 心[b][0]) + Math.abs(心[a][1] - 心[b][1]), a, b]);
+  对.sort((p, q) => p[0] - q[0]);
+  const 父 = 房.map((_, i) => i), 找 = i => { while (父[i] !== i) i = 父[i]; return i; };
+  const 连 = [], 回路 = [];
+  for (const [d, a, b] of 对) { if (找(a) !== 找(b)) { 父[找(a)] = 找(b); 连.push([a, b]); } else if (回路.length < 参数.多留回路 && d < 参数.回路最长) 回路.push([a, b]); }
+  const 走廊 = [];
+  for (const [a, b] of [...连, ...回路]) {
+    const [y0, x0] = 心[a], [y1, x1] = 心[b], 路 = [];
+    const sx = Math.sign(x1 - x0) || 1, sy = Math.sign(y1 - y0) || 1;
+    if (r() < 0.5) { for (let x = x0; x !== x1; x += sx) 路.push([y0, x]); for (let y = y0; y !== y1 + sy; y += sy) 路.push([y, x1]); }
+    else { for (let y = y0; y !== y1; y += sy) 路.push([y, x0]); for (let x = x0; x !== x1 + sx; x += sx) 路.push([y1, x]); }
+    const 挖 = []; for (const [y, x] of 路) if (格[y][x] === 0) { 格[y][x] = 2; 挖.push([y, x]); }
+    走廊.push({挖, 回路: 回路.includes(回路.find(q => q[0] === a && q[1] === b))});
+  }
+  // 5. 起点、首领、门、钥匙
+  const 能走 = (y, x, 堵) => y >= 0 && y < H && x >= 0 && x < W && 格[y][x] > 0 && !(堵 && 堵[0] === y && 堵[1] === x);
+  const 广搜 = (src, 堵) => { const D = 格.map(row => row.map(() => -1)); D[src[0]][src[1]] = 0; const q = [src]; for (let i = 0; i < q.length; i++) { const [y, x] = q[i]; for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const p = y + dy, s = x + dx; if (能走(p, s, 堵) && D[p][s] < 0) { D[p][s] = D[y][x] + 1; q.push([p, s]); } } } return D; };
+  const 普通 = 房.map((f, i) => i).filter(i => !房[i].洞);
+  const 起i = 普通.reduce((a, b) => (心[b][1] < 心[a][1] ? b : a)); // 最左边的房间当起点
+  const D0 = 广搜(心[起i]);
+  const 首i = 普通.reduce((a, b) => (D0[心[b][0]][心[b][1]] > D0[心[a][0]][心[a][1]] ? b : a));
+  const f = 房[首i]; let 门 = null;
+  for (let y = f.y - 1; y <= f.y + f.h; y++) for (let x = f.x - 1; x <= f.x + f.w; x++) {
+    const 里 = y >= f.y && y < f.y + f.h && x >= f.x && x < f.x + f.w;
+    if (!里 && 格[y] && 格[y][x] === 2 && (!门 || D0[y][x] < D0[门[0]][门[1]])) 门 = [y, x];
+  }
+  const Dk = 广搜(心[起i], 门);
+  const 候 = 房.map((_, i) => i).filter(i => i !== 起i && i !== 首i && Dk[心[i][0]][心[i][1]] > 0);
+  const 钥i = 候.reduce((a, b) => { const s = i => Dk[心[i][0]][心[i][1]] + 0.6 * Math.abs(心[i][0] - 门[0]) + Math.abs(心[i][1] - 门[1]); return s(b) > s(a) ? b : a; });
+  const 钥 = 心[钥i];
+  // 6. 怪物、宝箱、陷阱
+  const 最深 = Math.max(...D0.flat()), 怪 = [], 箱 = [], 阱 = [];
+  房.forEach((rr, i) => {
+    if (i === 起i) return;
+    const 深 = D0[心[i][0]][心[i][1]] / 最深;
+    const 格们 = []; for (let y = rr.y; y < rr.y + rr.h; y++) for (let x = rr.x; x < rr.x + rr.w; x++) if ((格[y][x] === 1 || 格[y][x] === 3) && !(y === 钥[0] && x === 钥[1]) && !(y === 心[i][0] && x === 心[i][1])) 格们.push([y, x]);
+    for (let k = 格们.length - 1; k > 0; k--) { const j = Math.floor(r() * (k + 1)); [格们[k], 格们[j]] = [格们[j], 格们[k]]; }
+    const n = i === 首i ? 0 : Math.round(参数.每房怪物[0] + 深 * (参数.每房怪物[1] - 参数.每房怪物[0]));
+    格们.slice(0, n).forEach(([y, x]) => 怪.push([y, x, 深]));
+    const 度 = [...连, ...回路].filter(([a, b]) => a === i || b === i).length;
+    if (度 === 1 && i !== 首i && i !== 钥i && 格们.length) 箱.push(格们[格们.length - 1]);
+  });
+  const 廊格 = 走廊.flatMap(w => w.挖).filter(([y, x]) => !(y === 门[0] && x === 门[1]) && D0[y][x] / 最深 > 0.25);
+  for (let k = 0; k < 参数.陷阱数 && 廊格.length; k++) 阱.push(廊格.splice(Math.floor(r() * 廊格.length), 1)[0]);
+  // 7. A* 寻路
+  const 阱集 = new Set(阱.map(([y, x]) => y * W + x)), 怪集 = new Set(怪.map(([y, x]) => y * W + x));
+  function A星(a, b, 堵) {
+    const 开 = [[Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]), 0, a]], 已 = new Set(), 前 = new Map(), g = new Map([[a[0] * W + a[1], 0]]), 顺序 = [];
+    while (开.length) {
+      开.sort((p, q) => p[0] - q[0]); const [, gg, cur] = 开.shift(), k = cur[0] * W + cur[1];
+      if (已.has(k)) continue; 已.add(k); 顺序.push(cur);
+      if (cur[0] === b[0] && cur[1] === b[1]) break;
+      for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const p = cur[0] + dy, s = cur[1] + dx; if (!能走(p, s, 堵)) continue;
+        const kk = p * W + s, 价 = gg + 1 + (阱集.has(kk) ? 参数.陷阱代价 : 0) + (怪集.has(kk) ? 参数.怪物代价 : 0);
+        if (价 < (g.get(kk) ?? 1e9)) { g.set(kk, 价); 前.set(kk, cur); 开.push([价 + Math.abs(p - b[0]) + Math.abs(s - b[1]), 价, [p, s]]); }
+      }
+    }
+    const 路 = []; let cur = b; while (cur) { 路.unshift(cur); cur = 前.get(cur[0] * W + cur[1]); }
+    return {顺序, 路};
+  }
+  const 段 = [A星(心[起i], 钥, 门), A星(钥, 门, null), A星(门, 心[首i], null)];
+  return {W, H, 格, 挖房后, 刀, 房, 洞, 洞步, 心, 走廊, 起i, 首i, 门, 钥, 怪, 箱, 阱, 段, seed};
+}
+
+// ---------------- 画：昏暗石头地牢，房间里点着暖灯 ----------------
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = 816 * dpr; cv.height = 576 * dpr;
+const g = cv.getContext('2d');
+const 噪 = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
+// 一块石砖：底色按位置抖一点亮暗，四周留一道暗缝，左上一道亮边
+function 砖(y, x, s, 色, 亮 = 0) {
+  const k = 0.86 + 噪(x, y) * 0.22 + 亮, [r, gg, b] = 色;
+  g.fillStyle = `rgb(${Math.min(255, r * k) | 0},${Math.min(255, gg * k) | 0},${Math.min(255, b * k) | 0})`;
+  const 缝 = Math.max(1, s * 0.08); g.fillRect(x * s + 缝 / 2, y * s + 缝 / 2, s - 缝, s - 缝);
+  g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(x * s + 缝 / 2, y * s + 缝 / 2, s - 缝, 缝);
+}
+const 石 = [92, 86, 116], 廊 = [176, 148, 104], 回廊 = [232, 163, 90], 苔 = [104, 132, 116], 暗 = [28, 26, 38];
+let 动画 = 0, 动画起 = 0;
+function 画() {
+  const T = 图, s = cv.width / T.W, 步 = 当前, a = Math.min(1, (performance.now() - 动画起) / 1600);
+  g.fillStyle = '#0a0910'; g.fillRect(0, 0, cv.width, cv.height);
+  // 还没挖的石头：暗暗的一层砖
+  for (let y = 0; y < T.H; y++) for (let x = 0; x < T.W; x++) 砖(y, x, s, 暗);
+  // 地面
+  const 用格 = 步 >= 2 ? T.格 : T.挖房后;
+  if (步 >= 1) for (let y = 0; y < T.H; y++) for (let x = 0; x < T.W; x++) {
+    const v = 用格[y][x];
+    if (v === 1) 砖(y, x, s, 石);
+    if (v === 2 && 步 >= 2) { const 回 = T.走廊.find(w => w.回路 && w.挖.some(p => p[0] === y && p[1] === x)); 砖(y, x, s, 回 && 步 === 2 ? 回廊 : 廊); }
+    if (v === 3 && 步 >= 3 && !(步 === 3 && a < 1)) 砖(y, x, s, 苔);
+  }
+  if (步 === 2) { // 走廊一条条挖出来
+    const n = Math.floor(a * T.走廊.length);
+    for (let i = n; i < T.走廊.length; i++) for (const [y, x] of T.走廊[i].挖) 砖(y, x, s, 暗);
+  }
+  if (步 === 3 && a < 1) { // 洞穴一轮一轮长出来
+    const k = Math.min(T.洞步.length - 1, Math.floor(a * T.洞步.length)), c = T.洞步[k];
+    for (let y = 0; y < T.洞.h; y++) for (let x = 0; x < T.洞.w; x++) if (c[y][x]) 砖(T.洞.y + y, T.洞.x + x, s, 苔);
+    g.fillStyle = '#e8ffe8'; g.font = `700 ${s * 0.9}px system-ui`; g.textAlign = 'left'; g.fillText(`第 ${k} 轮`, T.洞.x * s + 4, T.洞.y * s + s);
+  }
+  // 房间里的暖灯（房间挖出来以后才有）
+  if (步 >= 1) {
+    g.save(); g.globalCompositeOperation = 'lighter';
+    T.房.forEach(f => {
+      if (f.洞) return;
+      const cx = (f.x + f.w / 2) * s, cy = (f.y + f.h / 2) * s, R = Math.max(f.w, f.h) * s * 0.75;
+      const 光 = g.createRadialGradient(cx, cy, 0, cx, cy, R); 光.addColorStop(0, 'rgba(255,190,110,.32)'); 光.addColorStop(1, 'rgba(255,170,90,0)');
+      g.fillStyle = 光; g.fillRect(cx - R, cy - R, R * 2, R * 2);
+    });
+    g.restore();
+  }
+  // 切的刀：发光的金线
+  if (步 === 0) {
+    const n = Math.ceil(a * T.刀.length);
+    g.strokeStyle = '#ffc84a'; g.lineWidth = 2 * dpr; g.shadowColor = '#ffb030'; g.shadowBlur = 10 * dpr;
+    T.刀.slice(0, n).forEach(([x0, y0, x1, y1]) => { g.beginPath(); g.moveTo(x0 * s, y0 * s); g.lineTo(x1 * s, y1 * s); g.stroke(); });
+    g.shadowBlur = 0;
+  }
+  if (步 === 1) T.房.forEach(f => { if (f.洞) { g.strokeStyle = '#9fd0a8'; g.lineWidth = 1.5 * dpr; g.setLineDash([4 * dpr, 4 * dpr]); g.strokeRect(f.x * s, f.y * s, f.w * s, f.h * s); g.setLineDash([]); } });
+  // 起点、首领、门、钥匙：发光的小牌子
+  const 牌 = (y, x, t, c) => {
+    const cx = x * s + s / 2, cy = y * s + s / 2, r = s * 0.9;
+    g.shadowColor = c; g.shadowBlur = s * 0.8; g.fillStyle = 'rgba(12,10,20,.85)'; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill();
+    g.strokeStyle = c; g.lineWidth = s * 0.12; g.stroke(); g.shadowBlur = 0;
+    g.font = `900 ${s * 1.05}px system-ui,'Microsoft YaHei'`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = c; g.fillText(t, cx, cy + s * 0.03); g.textBaseline = 'alphabetic';
+  };
+  const 史莱姆 = (y, x, d) => {
+    const cx = x * s + s / 2, cy = y * s + s * 0.62, r = s * 0.36;
+    g.fillStyle = `rgb(${110 + 60 * d},${210 - 90 * d},${110 - 40 * d})`; g.shadowColor = g.fillStyle; g.shadowBlur = s * 0.4;
+    g.beginPath(); g.ellipse(cx, cy, r, r * 0.8, 0, Math.PI, 0); g.lineTo(cx + r, cy + r * 0.3); g.lineTo(cx - r, cy + r * 0.3); g.fill(); g.shadowBlur = 0;
+    g.fillStyle = '#1a1020'; g.fillRect(cx - r * 0.42, cy - r * 0.35, r * 0.2, r * 0.32); g.fillRect(cx + r * 0.22, cy - r * 0.35, r * 0.2, r * 0.32);
+  };
+  if (步 >= 5) {
+    T.阱.forEach(([y, x]) => { g.strokeStyle = '#ff4d5e'; g.lineWidth = s * 0.14; g.shadowColor = '#ff2040'; g.shadowBlur = s * 0.5; const m = s * 0.25; g.beginPath(); g.moveTo(x * s + m, y * s + m); g.lineTo(x * s + s - m, y * s + s - m); g.moveTo(x * s + s - m, y * s + m); g.lineTo(x * s + m, y * s + s - m); g.stroke(); g.shadowBlur = 0; });
+    T.箱.forEach(([y, x]) => { const m = s * 0.18; g.fillStyle = '#d9962e'; g.shadowColor = '#ffc84a'; g.shadowBlur = s * 0.6; g.fillRect(x * s + m, y * s + m * 1.4, s - m * 2, s - m * 2.4); g.shadowBlur = 0; g.fillStyle = '#7a4a1a'; g.fillRect(x * s + m, y * s + s * 0.45, s - m * 2, s * 0.1); });
+    T.怪.forEach(([y, x, d]) => 史莱姆(y, x, d));
+  }
+  if (步 >= 4) {
+    const [sy, sx] = T.心[T.起i], [by, bx] = T.心[T.首i];
+    牌(sy, sx, '起', '#5ab8ff'); 牌(by, bx, '王', '#ff4d5e'); 牌(T.门[0], T.门[1], '锁', '#ffd23c'); 牌(T.钥[0], T.钥[1], '钥', '#ffb020');
+  }
+  if (步 >= 6) { // A*：先放展开的格子（蓝），再画选中的路（金），再让小人走
+    const 全 = T.段.flatMap(d => d.顺序), 路 = T.段.flatMap(d => d.路);
+    const 进 = Math.min(1, (performance.now() - 动画起) / 6000);
+    const n1 = Math.floor(Math.min(1, 进 * 2) * 全.length);
+    for (let i = 0; i < n1; i++) { const [y, x] = 全[i]; g.fillStyle = 'rgba(90,160,255,0.26)'; g.fillRect(x * s, y * s, s, s); }
+    if (进 > 0.5) {
+      g.shadowColor = '#ffc84a'; g.shadowBlur = s * 0.6; g.fillStyle = 'rgba(255,205,90,0.9)';
+      for (const [y, x] of 路) g.fillRect(x * s + s * 0.32, y * s + s * 0.32, s * 0.36, s * 0.36);
+      const k = Math.min(路.length - 1, Math.floor((进 - 0.5) * 2 * 路.length)), [y, x] = 路[k];
+      const cx = x * s + s / 2, cy = y * s + s / 2;
+      g.save(); g.globalCompositeOperation = 'lighter'; const 灯 = g.createRadialGradient(cx, cy, 0, cx, cy, s * 4); 灯.addColorStop(0, 'rgba(140,200,255,.45)'); 灯.addColorStop(1, 'rgba(140,200,255,0)'); g.fillStyle = 灯; g.fillRect(cx - s * 4, cy - s * 4, s * 8, s * 8); g.restore();
+      g.shadowColor = '#7fd0ff'; g.shadowBlur = s; g.fillStyle = '#dff3ff'; g.beginPath(); g.arc(cx, cy, s * 0.42, 0, 7); g.fill(); g.shadowBlur = 0;
+    }
+    g.shadowBlur = 0;
+  }
+  // 四角压暗，像只有灯照着的地方亮
+  const 晕 = g.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * 0.35, cv.width / 2, cv.height / 2, cv.width * 0.7);
+  晕.addColorStop(0, 'rgba(0,0,0,0)'); 晕.addColorStop(1, 'rgba(0,0,0,.55)'); g.fillStyle = 晕; g.fillRect(0, 0, cv.width, cv.height);
+  if (当前 >= 0 && 当前 <= 6 && (a < 1 || 当前 === 6)) requestAnimationFrame(画);
+}
+function 到(k) {
+  当前 = k; 动画起 = performance.now();
+  [...ul.children].forEach((li, i) => li.className = i < k ? 'done' : i === k ? 'now' : '');
+  document.getElementById('say').textContent = 解说[k] || '';
+  requestAnimationFrame(画);
+}
+function 新图() { let seed; for (let k = 0; k < 20; k++) { seed = Math.floor(Math.random() * 1e6); try { 图 = 生成(seed); if (图.门 && 图.段.every(d => d.路.length > 1)) break; } catch (e) {} } /* 极少数种子生成不出门，换一个 */ document.getElementById('seed').textContent = seed; 到(0); }
+document.getElementById('next').onclick = () => 到(Math.min(6, 当前 + 1));
+document.getElementById('again').onclick = 新图;
+document.getElementById('auto').onclick = () => {
+  if (自动) { clearInterval(自动); 自动 = null; return; }
+  到(0); 自动 = setInterval(() => { if (当前 >= 6) { clearInterval(自动); 自动 = null; } else 到(当前 + 1); }, 2600);
+};
+新图();
+</script>
+</body>
+</html>

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>13 声音 · 小例子</title>
+<style>
+:root{--bg:#06080f;--panel:rgba(13,17,32,.9);--line:#22305a;--txt:#e8eeff;--dim:#8f9cc4;--acc:#4dc8ff}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(ellipse at 50% 0,#14203f,var(--bg) 60%);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;padding:12px;min-height:100vh}
+body>*{max-width:1080px;margin-left:auto;margin-right:auto}
+h1{font-size:22px;margin:4px auto;font-weight:900}h2{font-size:13px;color:var(--acc);margin:10px 0 4px;text-shadow:0 0 8px rgba(77,200,255,.5)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px auto}.tabs button{flex:1;min-width:120px}
+button,select{background:#111a33;color:var(--txt);border:1px solid #2c3d70;border-radius:8px;padding:5px 9px;cursor:pointer;font-size:13px;font-weight:700}
+button:hover,button.on{border-color:var(--acc);box-shadow:0 0 10px rgba(77,200,255,.45)}button.on{background:#16305a}
+.page{display:none;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.page.on{display:block}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+canvas{width:100%;display:block;border-radius:10px;background:#070912;border:1px solid var(--line)}
+.out{background:rgba(6,8,15,.8);border:1px solid #1a2548;border-radius:8px;padding:8px 10px;margin:6px 0}
+.dim{color:var(--dim);font-size:12px}
+input[type=range]{flex:1;min-width:140px;accent-color:#4dc8ff}
+input[type=checkbox]{accent-color:#4dc8ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px}
+.grid button{text-align:left;padding:6px 8px;border-left:3px solid #4dc8ff}
+.grid button small{display:block;color:var(--dim);font-size:11px}
+.blk{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0;background:rgba(10,14,28,.6)}
+label{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
+</style>
+</head>
+<body>
+<h1>13 声音：一串数字，每秒两万多个</h1>
+<p class="dim">所有声音都是公式现算的，没有一个录音文件。第一次点按钮时浏览器才允许出声。</p>
+<div class="tabs"><button data-t="blk" class="on">① 四块积木 → 乐器</button><button data-t="lib">② 40 种声音（每个都能调）</button><button data-t="voice">③ 配音和配乐让路</button></div>
+<canvas id="wave" width="960" height="150"></canvas>
+<canvas id="spec" width="960" height="150" style="margin-top:4px"></canvas>
+
+<div class="page on" id="p-blk">
+  <div class="blk"><h2>第一块：正弦波（最纯的声音，像音叉）</h2><div class="row">音高 <input type="range" id="b1f" min="80" max="2000" value="440"><b id="b1v"></b><button id="b1">听</button></div></div>
+  <div class="blk"><h2>第二块：噪声（一串乱数，沙沙响）</h2><div class="row"><button id="b2w">白噪声</button><button id="b2p">粉噪声（柔一点）</button><button id="b2b">褐噪声（低沉）</button></div></div>
+  <div class="blk"><h2>第三块：音量曲线（同一个音，像敲还是像吹）</h2><div class="row">起音 <input type="range" id="b3a" min="0.002" max="0.8" step="0.001" value="0.003">　衰减 <input type="range" id="b3d" min="0.05" max="2" step="0.01" value="0.3"><button id="b3">听</button><button id="b3k">像敲</button><button id="b3c">像吹</button></div></div>
+  <div class="blk"><h2>第四块：滤波（去掉太高或太低的部分）</h2><div class="row">扫多快 <input type="range" id="b4s" min="0.1" max="1.5" step="0.01" value="0.35"><button id="b4">噪声 + 一开一合的滤波 = 「嗖」</button></div></div>
+  <div class="blk"><h2>搭起来</h2><div class="row"><button id="c1">叮（四个高音很快消失）</button><button id="c2">琴弦（泛音整齐 1:2:3:4）</button><button id="c3">钟（泛音是乱的 1:2:2.76:5.4:8.9）</button><button id="c4">编钟（七个音按钟的比例）</button></div></div>
+  <div class="blk"><h2>古筝：一小段沙沙声在圈里转，每圈把相邻两个数取平均（1983 年的拨弦算法）</h2>
+    <div class="row">弦长（越短越高）<input type="range" id="z1" min="20" max="400" value="100"><b id="z1v"></b>　余音 <input type="range" id="z2" min="0.98" max="0.9995" step="0.0005" value="0.996"><button id="z">拨一下</button><button id="zg">刮奏（一口气拨十根）</button></div></div>
+  <div class="blk"><h2>中国味：只用 宫 商 角 徵 羽 五个音，加大厅回声</h2><div class="row"><label><input type="checkbox" id="m7"> 混进「发」「西」两个音（对比）</label>　回声 <input type="range" id="mv" min="0" max="0.6" step="0.01" value="0.3"><button id="m">随机来一段</button></div></div>
+</div>
+
+<div class="page" id="p-lib">
+  <div class="row"><b id="lName">点一个声音</b>　<span id="lHow" class="dim"></span></div>
+  <div class="row"><span id="lPar" style="min-width:110px">参数</span><input type="range" id="lK" min="0" max="1" step="0.01" value="0.5"><button id="lPlay">再听一次</button></div>
+  <div id="lib"></div>
+</div>
+
+<div class="page" id="p-voice">
+  <div class="row">声音 <select id="vV"></select>　语速 <input type="range" id="vR" min="0.5" max="1.5" step="0.05" value="1"><b id="vRv"></b>　音高 <input type="range" id="vP" min="0.5" max="1.5" step="0.05" value="1"></div>
+  <div class="row"><button id="vSay">说「天冷了，记得多穿件衣裳。」</button><button id="vOld">照顾老人家：语速放慢再说一遍</button><button id="vMus">配乐 开 / 关</button><label><input type="checkbox" id="vDuck" checked> 有人说话时配乐让路</label></div>
+  <canvas id="vC" width="960" height="120"></canvas>
+  <div class="out" id="vOut"></div>
+</div>
+
+<script>
+// ===================== 参数表 =====================
+const SR = 22050;               // 每秒多少个数（采样率）。CD 是 44100，这里用一半，算得快，够用
+const 让路 = {压到: 0.25, 压下秒: 0.15, 回来秒: 0.6};   // 有人说话：配乐压到 25%，0.15 秒压下去，说完 0.6 秒回来
+const 五声 = [0, 2, 4, 7, 9];    // 宫 商 角 徵 羽（相对主音的半音数）
+const 七声 = [0, 2, 4, 5, 7, 9, 11];
+// ================================================
+
+// ---------- 小工具：一切都是 Float32Array ----------
+let 随 = 种子(1);
+function 种子(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const 长 = d => Math.max(1, Math.round(d * SR)), 空 = d => new Float32Array(长(d));
+const 取 = (v, t) => typeof v === 'function' ? v(t) : v;   // 参数可以是数，也可以是「随时间变化的函数」
+const 范 = (a, b) => a + (b - a) * 随();
+const mf = m => 440 * Math.pow(2, (m - 69) / 12);
+function 做(d, f) { const x = 空(d); for (let i = 0; i < x.length; i++) x[i] = f(i / SR, i); return x; }
+function 白噪(d) { return 做(d, () => 随() * 2 - 1); }
+function 粉噪(d) { let b0 = 0, b1 = 0, b2 = 0; return 做(d, () => { const w = 随() * 2 - 1; b0 = .99765 * b0 + w * .099046; b1 = .963 * b1 + w * .2965164; b2 = .57 * b2 + w * 1.0526913; return (b0 + b1 + b2 + w * .1848) * .2; }); }
+function 褐噪(d) { let y = 0; return 做(d, () => { y = (y + .02 * (随() * 2 - 1)) / 1.02; return y * 3.5; }); }
+function 低通(x, f, o = 2) { let y = Float32Array.from(x); for (let k = 0; k < o; k++) { let s = 0; for (let i = 0; i < y.length; i++) { const a = 1 - Math.exp(-2 * Math.PI * Math.min(取(f, i / SR), SR * .45) / SR); s += a * (y[i] - s); y[i] = s; } } return y; }
+function 高通(x, f, o = 2) { let y = Float32Array.from(x); for (let k = 0; k < o; k++) { const l = 低通(y, f, 1); for (let i = 0; i < y.length; i++) y[i] -= l[i]; } return y; }
+const 带通 = (x, lo, hi) => 低通(高通(x, lo), hi);
+function 窄带(x, fc, q) { let lo = 0, bd = 0; const y = new Float32Array(x.length); for (let i = 0; i < x.length; i++) { const f = 2 * Math.sin(Math.PI * Math.min(取(fc, i / SR), SR * .2) / SR); lo += f * bd; const hi = x[i] - lo - bd / q; bd += f * hi; y[i] = bd; } return y; }
+function 游走(d, rate, s = 7) { const r = 种子(s), pts = Array.from({length: Math.ceil(d * rate) + 3}, () => r()); return 做(d, t => { const u = t * rate, i = Math.floor(u), f = u - i, w = (1 - Math.cos(Math.PI * f)) / 2; return pts[i] * (1 - w) + pts[i + 1] * w; }); }
+function 振(f, d, 形 = 'sin', duty = .5) { let ph = 0; return 做(d, t => { ph += 取(f, t) / SR; const p = ph - Math.floor(ph);
+  return 形 === 'sin' ? Math.sin(2 * Math.PI * ph) : 形 === 'sq' ? (p < duty ? 1 : -1) : 形 === 'saw' ? 2 * p - 1 : 1 - 4 * Math.abs(p - .5); }); }
+const 衰 = (d, rate, a = .002) => 做(d, t => Math.exp(-t * rate) * Math.min(1, t / a));
+function 乘(...xs) { const y = Float32Array.from(xs[0]); for (const x of xs.slice(1)) for (let i = 0; i < y.length; i++) y[i] *= typeof x === 'number' ? x : (x[i] ?? 0); return y; }
+function 加(...xs) { const y = Float32Array.from(xs[0]); for (const x of xs.slice(1)) for (let i = 0; i < y.length; i++) y[i] += x[i] ?? 0; return y; }
+function 共振(fs, decs, amps, d) { return 做(d, t => fs.reduce((s, f, k) => s + Math.sin(2 * Math.PI * f * t) * Math.exp(-t * decs[k]) * amps[k], 0)); }
+function 放(d, items) { const y = 空(d); for (const [s, x, g] of items) { const o = Math.round(s * SR); for (let i = 0; i < x.length && o + i < y.length; i++) y[o + i] += x[i] * g; } return y; }
+function 混响(x, 秒 = 1.5, 湿 = .3) {   // 四个梳状 + 两个全通（经典的 Schroeder 混响）
+  const y = Float32Array.from(x), out = new Float32Array(x.length);
+  for (const dl of [1557, 1617, 1491, 1422].map(v => Math.round(v * SR / 44100))) { const g = Math.pow(10, -3 * dl / (秒 * SR)), b = new Float32Array(dl); let k = 0;
+    for (let i = 0; i < y.length; i++) { const o = b[k]; b[k] = y[i] + o * g; out[i] += o * .25; k = (k + 1) % dl; } }
+  for (const dl of [225, 556].map(v => Math.round(v * SR / 44100))) { const b = new Float32Array(dl); let k = 0;
+    for (let i = 0; i < out.length; i++) { const o = b[k], v = out[i] + o * .5; b[k] = v; out[i] = o - v * .5; k = (k + 1) % dl; } }
+  for (let i = 0; i < y.length; i++) y[i] = y[i] * (1 - 湿) + out[i] * 湿 * 2; return y; }
+function 回声(x, dl, fb, n = 4) { const y = Float32Array.from(x), o = Math.round(dl * SR); for (let k = 1; k <= n; k++) for (let i = 0; i + k * o < y.length; i++) y[i + k * o] += x[i] * Math.pow(fb, k); return y; }
+let 寄存器表 = null;
+function 红白机噪(rate, d) {   // 15 位移位寄存器吐出的 0/1 序列
+  if (!寄存器表) { 寄存器表 = new Float32Array(32767); let r = 1; for (let i = 0; i < 32767; i++) { const b = (r ^ (r >> 1)) & 1; r = (r >> 1) | (b << 14); 寄存器表[i] = r & 1 ? 1 : -1; } }
+  let p = 0; return 做(d, t => { p += 取(rate, t) / SR; return 寄存器表[Math.floor(p) % 32767]; }); }
+const 十六级 = e => Math.round(e * 15) / 15;   // 红白机音量只有 16 级
+const 音符 = (f, d, 形 = 'sq', duty = .5, rate = 4) => { const o = 振(f, d, 形, duty); return 做(d, (t, i) => o[i] * 十六级(Math.exp(-t * rate) * Math.min(1, t / .003))); };
+function 拨弦(f, d, 余 = .996) {   // 拨弦算法：一圈噪声，每转一圈相邻两个数取平均
+  const L = Math.max(2, Math.round(SR / f)), buf = new Float32Array(L); for (let i = 0; i < L; i++) buf[i] = 随() * 2 - 1; let k = 0;
+  return 做(d, () => { const a = buf[k], b = buf[(k + 1) % L]; buf[k] = 余 * (a + b) / 2; k = (k + 1) % L; return a; }); }
+function 钟(f, d, rate = 2.2) { return 共振([f, f * 2, f * 2.76, f * 5.4, f * 8.9], [rate, rate * 1.3, rate * 1.8, rate * 3, rate * 4.5], [1, .5, .4, .15, .08], d); }
+function 星星(d, s, lo, hi, n, 升 = true) { const r = 种子(s); const it = []; for (let k = 0; k < n; k++) { const st = Math.pow(r(), 升 ? .7 : 1.5) * (d - .4); const f = (lo + (hi - lo) * r()) * (1 + (升 ? st / d : 0)); it.push([st, 共振([f, f * 2.01], [9, 14], [1, .3], .4), .2 + .4 * r()]); } return 放(d, it); }
+
+// ---------- ② 40 种声音：名字, 分类, 做法, 参数名, 函数(k) ----------
+const 库 = [
+  ['下雨', '大自然', '柔和的噪声 + 几百个随机水滴（每滴 = 极短、音高往上滑的「嘀」）', '雨多大', k => { const d = 2; const sheet = 乘(低通(带通(粉噪(d), 350, 9000), 7000), .5); const it = []; for (let i = 0; i < d * (60 + 400 * k); i++) { const f0 = 范(1800, 5000), dec = 范(.004, .01), x = 做(.03, t => Math.sin(2 * Math.PI * f0 * (t + 6 * t * t)) * Math.exp(-t / dec)); it.push([范(0, d - .03), x, Math.pow(范(.05, 1), 2) * .35]); } return 加(sheet, 放(d, it)); }],
+  ['打雷', '大自然', '开头一声炸裂（高频噪声）+ 忽大忽小的低频轰隆 + 回声', '远 ↔ 近', k => { const d = 2.6; const crack = 乘(高通(白噪(d), 1200), 衰(d, 22), 1.6 * k); const am = 游走(d, 5, 4); const rum = 乘(低通(褐噪(d), 120 + 120 * k, 3), 做(d, (t, i) => (.35 + am[i] * am[i] * 1.4) * Math.min(1, t / .12) * Math.exp(-t * .8)), 1.8); const boom = 乘(振(t => 42 + 30 * Math.exp(-t * 4), d), 衰(d, 2.2, .02), .9); return 混响(加(crack, rum, boom), 2.2, .4); }],
+  ['大风', '大自然', '噪声只放一段频率（窄带），让这个频率慢慢游走', '风多大', k => { const d = 2.4, w = 游走(d, .9, 7); const howl = 乘(窄带(粉噪(d), t => 280 + (500 + 600 * k) * w[Math.min(w.length - 1, Math.round(t * SR))], 7), .6); const body = 乘(低通(粉噪(d), 500), .5); return 乘(加(howl, body), 做(d, (t, i) => .25 + .75 * Math.pow(Math.sin(Math.PI * t / d), 1.5) * (.6 + .4 * w[i])), .5 + k); }],
+  ['海浪', '大自然', '低沉的噪声涨起来再退下去，浪越大声音越「亮」', '浪多大', k => { const d = 2.6, pk = .9; const sw = 做(d, t => t < pk ? Math.pow(t / pk, 2) : Math.exp(-(t - pk) * 1.3)); const roar = 低通(加(褐噪(d), 乘(粉噪(d), .3)), t => 150 + (1500 + 2000 * k) * (t < pk ? Math.pow(t / pk, 2) : Math.exp(-(t - pk) * 1.3))); const hiss = 乘(高通(白噪(d), 3000), 做(d, t => Math.min(1, Math.max(0, (t - pk) / .2)) * Math.exp(-Math.max(0, t - pk) * 1.6)), .18 * k); return 加(乘(roar, sw, 1.2), hiss); }],
+  ['篝火', '大自然', '低沉的呼呼 + 随机出现的极短「咔」（噼啪）', '噼啪多少', k => { const d = 2, w = 游走(d, 3, 9); const roar = 乘(低通(褐噪(d), 350), 做(d, (t, i) => .5 + .5 * w[i]), .45); const it = []; for (let i = 0; i < d * (10 + 50 * k); i++) { const L = Math.floor(范(60, 400)); it.push([范(0, d - .02), 做(L / SR, (t, j) => (随() * 2 - 1) * Math.exp(-j / (L / 5))), Math.pow(范(.2, 1), 2)]); } for (let i = 0; i < d * 2.5 * k + 1; i++) { const f = 范(700, 1800); it.push([范(0, d - .1), 做(.06, t => Math.sin(2 * Math.PI * f * t) * Math.exp(-t * 70)), 1.2]); } return 加(roar, 乘(高通(放(d, it), 900), .9)); }],
+  ['小溪', '大自然', '上百个低音小气泡', '水量', k => { const d = 2, it = []; for (let i = 0; i < d * (60 + 200 * k); i++) { const f0 = 范(350, 1300), dec = 范(.004, .01); it.push([范(0, d - .03), 做(.03, t => Math.sin(2 * Math.PI * f0 * (t + 6 * t * t)) * Math.exp(-t / dec)), Math.pow(范(.05, 1), 2) * .5]); } return 加(放(d, it), 乘(带通(粉噪(d), 300, 2600), .12)); }],
+  ['鸟叫', '大自然', '一个纯音，音高飞快地滑上滑下，加一段颤音', '音高', k => { const s = .6 + .8 * k, it = []; let st = .05; [[5200, 2600, .09], [5200, 2600, .09], [5200, 2600, .09], [3000, 4800, .07], [3000, 4800, .07], [6200, 3200, .16]].forEach(([a, b, L], j) => { let ph = 0; it.push([st, 做(L, t => { ph += (a + (b - a) * Math.pow(t / L, .7)) * s / SR; return (Math.sin(2 * Math.PI * ph) + .15 * Math.sin(4 * Math.PI * ph)) * Math.pow(Math.sin(Math.PI * t / L), 2); }), .8]); st += L + (j < 5 ? .05 : 0); }); st += .35; let ph = 0; it.push([st, 做(.5, t => { ph += (3800 + 900 * Math.sin(2 * Math.PI * 26 * t)) * s / SR; return Math.sin(2 * Math.PI * ph) * Math.pow(Math.sin(Math.PI * t / .5), 1.5) * .6; }), 1]); return 混响(放(2, it), 1, .2); }],
+  ['蟋蟀', '大自然', '4700 赫兹的短音，四个一组。天越热叫得越快（真有这条规律）', '气温', k => { const d = 2, it = []; let s = .05; const gap = .55 - .35 * k; while (s < d - .2) { for (let p = 0; p < 4; p++) it.push([s + p * .032, 做(.018, t => Math.sin(2 * Math.PI * 4700 * t) * Math.sin(Math.PI * t / .018)), 1]); s += gap; } return 放(d, it); }],
+  ['青蛙', '大自然', '低音锯齿脉冲 + 两个共鸣频率', '个头（越大越低）', k => { const d = 1.8, it = []; const f0 = 140 - 80 * k; for (const s of [.05, .75]) { const L = .42, src = 乘(振(t => f0 * (1 - .1 * t / L), L, 'saw'), 做(L, t => .5 + .5 * Math.sign(Math.sin(2 * Math.PI * 22 * t)))); it.push([s, 乘(加(乘(带通(src, 350, 900), 1.5), 乘(带通(src, 1300, 1900), .6)), 做(L, t => Math.sqrt(Math.sin(Math.PI * t / L)))), 1]); } return 混响(放(d, it), .8, .15); }],
+  ['山洞滴水', '大自然', '往上滑的「嘀」 + 很长的回声', '山洞多大', k => { const drop = f0 => { let ph = 0; return 做(.08, t => { ph += f0 * (1 + 25 * t) / SR; return Math.sin(2 * Math.PI * ph) * Math.exp(-t * 45); }); }; return 混响(放(2.2, [[.05, drop(700), 1], [.95, drop(820), .8]]), .5 + 3 * k, .4 + .5 * k); }],
+  ['心跳', '生活', '两声很低、音高往下掉的「咚」（扑通）', '心率', k => { const bpm = 50 + 100 * k, gap = 60 / bpm, it = []; const th = (g) => 做(.2, t => Math.sin(2 * Math.PI * (60 - 50 * t) * t) * Math.exp(-t * 22) * g); for (let s = .05; s < 1.9; s += gap) it.push([s, th(1), 1], [s + gap * .3, th(.7), 1]); return 低通(放(2, it), 200); }],
+  ['敲门', '生活', '四个衰减很快的木头共振 + 一点碰撞噪声', '木头厚度', k => { const sc = 1.5 - k; const one = () => 加(共振([190, 420, 760, 1180].map(f => f * sc), [45, 60, 80, 110], [1, .6, .35, .2], .25), 乘(低通(白噪(.25), 2500), 衰(.25, 300), .8)); return 放(1.3, [[.05, one(), 1], [.25, one(), .85], [.45, one(), .95]]); }],
+  ['脚步', '生活', '脚跟一声闷的「咚」 + 脚尖一声轻的「嚓」', '走多快', k => { const gap = .7 - .45 * k, it = []; for (let s = .05; s < 1.9; s += gap) { it.push([s, 乘(加(乘(低通(白噪(.2), 700), 1.2), 乘(振(95, .2), .6)), 衰(.2, 55)), 1]); it.push([s + .07, 乘(带通(白噪(.12), 500, 3000), 衰(.12, 60), .5), 1]); } return 混响(放(2, it), .6, .2); }],
+  ['打碎玻璃', '生活', '一声碎响 + 几十块碎片，每块一组高音', '碎片多少', k => { const d = 1.8; let x = 乘(高通(白噪(d), 1500), 衰(d, 30), 1.2); const it = []; for (let i = 0; i < 10 + 80 * k; i++) { const s = -Math.log(1 - 随()) * .25; if (s > d - .3) continue; const f = 范(2200, 9000), dc = 范(8, 25); it.push([s, 共振([f, f * 1.51, f * 2.3], [dc, dc, dc], [1, .5, .25], .6), 范(.1, .6)]); } return 加(x, 放(d, it)); }],
+  ['钟表', '生活', '两种音高的「咔」交替出现（滴、答）', '走多快', k => { const gap = .7 - .45 * k; const cl = f => 加(乘(高通(白噪(.06), 3000), 衰(.06, 400)), 乘(振(f, .06), 衰(.06, 120), .6)); const it = []; let j = 0; for (let s = .05; s < 1.8; s += gap, j++) it.push([s, cl(j % 2 ? 1900 : 2600), 1]); return 混响(放(1.9, it), .5, .15); }],
+  ['打字机', '生活', '随机间隔的「咔嗒」 + 最后一声换行铃', '打字多快', k => { const it = []; let s = .05; for (let j = 0; j < 9; j++) { it.push([s, 加(乘(带通(白噪(.08), 1500, 6000), 衰(.08, 150)), 乘(振(210, .08), 衰(.08, 60), .7)), 范(.7, 1)]); s += 范(.08, .14) * (1.6 - k); } it.push([s + .12, 共振([2100, 5300, 8100], [3.5, 5, 7], [1, .4, .2], 1.2), .5]); return 放(2.6, it); }],
+  ['相机快门', '生活', '两声「咔」，中间一小段机械声', '快门多慢', k => { const cl = g => 乘(加(乘(带通(白噪(.05), 1500, 7000), 衰(.05, 250)), 乘(振(900, .05), 衰(.05, 150), .5)), g); const gap = .06 + .4 * k; return 放(1, [[.05, cl(1), 1], [.07, 乘(带通(白噪(gap), 800, 3000), 做(gap, t => Math.sin(Math.PI * t / gap)), .25), 1], [.08 + gap, cl(.8), 1]]); }],
+  ['水壶烧开', '生活', '噪声通过一个很窄、慢慢升高的频率', '开到几成', k => { const d = 2.2, fc = t => 1200 + (500 + 900 * k) * Math.pow(t / d, .6) + 25 * Math.sin(2 * Math.PI * 5 * t); return 乘(加(乘(窄带(白噪(d), fc, 60), .5), 乘(振(fc, d), 做(d, t => Math.min(1, t / .8)), .25 * k), 乘(高通(白噪(d), 2500), .05)), 做(d, t => Math.min(1, t / .5))); }],
+  ['门铃', '生活', '两个钟声，一高一低（叮—咚）', '音高', k => { const s = .7 + .6 * k; return 放(2.2, [[.05, 钟(659.3 * s, 2.2), 1], [.6, 钟(523.3 * s, 1.6), 1]]); }],
+  ['开瓶盖', '生活', '一声往上滑的「啵」 + 气泡嘶嘶', '气多足', k => { let ph = 0; const pop = 加(做(.08, t => { ph += (350 + 900 * t / .08) / SR; return Math.sin(2 * Math.PI * ph) * Math.exp(-t * 45); }), 乘(低通(白噪(.08), 3000), 衰(.08, 200), .8)); return 放(1.2, [[.05, pop, 1], [.12, 乘(高通(白噪(1), 4000), 衰(1, 3), .03 + .15 * k), 1]]); }],
+  ['金币', '游戏', '方波，两个短音一个比一个高（红白机风格）', '音高', k => { const o = Math.round(-6 + 12 * k); return 放(.9, [[.03, 音符(mf(81 + o), .07, 'sq', .5, 0), .5], [.1, 音符(mf(88 + o), .6, 'sq', .5, 5), .5]]); }],
+  ['跳跃', '游戏', '方波，音高飞快往上滑', '跳多高', k => { const r = 1.5 + 4 * k; return 放(.7, [[.03, 乘(振(t => 280 * Math.pow(r, t / .3), .3, 'sq', .25), 做(.3, t => 十六级(Math.exp(-t * 6)))), .5]]); }],
+  ['吃到道具', '游戏', '七个音快速往上爬', '爬多快', k => { const g = .09 - .06 * k; return 放(1.1, [72, 76, 79, 84, 88, 91, 96].map((m, j) => [.03 + j * g, 音符(mf(m), .12, 'sq', .125, 10), .45])); }],
+  ['升级', '游戏', '四个音往上走，落在一个和弦上', '速度', k => { const g = .14 - .08 * k, it = [67, 72, 76, 79].map((m, j) => [.03 + j * g, 音符(mf(m), .12, 'sq', .5, 6), .45]); const s = .03 + 4 * g; for (const m of [84, 88, 91]) it.push([s, 乘(振(t => mf(m) * (1 + .01 * Math.sin(2 * Math.PI * 6 * t)), 1.1, 'sq', .25), 做(1.1, t => 十六级(Math.exp(-t * 2.2)))), .22]); it.push([s, 乘(振(mf(48), 1.1, 'tri'), 衰(1.1, 2)), .6]); return 放(1.8, it); }],
+  ['受伤', '游戏', '方波往下掉 + 一点噪声', '多痛', k => { const sq = 乘(振(t => 420 * Math.exp(-t * (3 + 8 * k)), .25, 'sq'), 做(.25, t => 十六级(Math.exp(-t * 9))), .45); const nz = 乘(红白机噪(9000, .12), 做(.12, t => 十六级(Math.exp(-t * 25))), .2 + .4 * k); return 放(.7, [[.03, sq, 1], [.03, nz, 1]]); }],
+  ['8 位爆炸', '游戏', '红白机噪声越读越慢（越来越粗糙）、越来越小', '多大', k => { const L = .5 + 1.2 * k; return 放(L + .1, [[.03, 乘(低通(乘(红白机噪(t => 4000 * Math.exp(-t * 2.5 / L * 1.4) + 300, L), 做(L, t => 十六级(Math.exp(-t * 2.6 / L * 1.4)))), 6000), .6), 1]]); }],
+  ['挥剑', '游戏', '噪声的频率一扫而过（嗖）+ 一点金属声', '挥多快', k => { const L = .55 - .35 * k; const sw = 乘(窄带(白噪(L), t => 600 + 3500 * Math.pow(Math.sin(Math.PI * t / L), 2), 1.8), 做(L, t => Math.pow(Math.sin(Math.PI * t / L), 1.3)), .9); return 放(.9, [[.03, sw, 1], [.03 + L * .55, 共振([2700, 4100, 6300], [7, 9, 12], [1, .5, .3], .6), .25]]); }],
+  ['出拳', '游戏', '一个很低、往下掉的「咚」 + 一声脆响', '多重', k => { const lo = 40 + 50 * (1 - k); return 放(.7, [[.03, 加(乘(振(t => lo + 110 * Math.exp(-t * 30), .3), 衰(.3, 14)), 乘(带通(白噪(.3), 800, 4000), 衰(.3, 60), .9 - .5 * k)), 1]]); }],
+  ['魔法', '游戏', '几十个随机高音越来越密 + 往上扫的「呼」', '星星多少', k => { const d = 1.8; return 加(星星(d, 23, 2500, 7500, 10 + 60 * k), 乘(窄带(白噪(d), t => 500 + 3000 * t / d, 3), 做(d, t => Math.sin(Math.PI * t / d)), .35)); }],
+  ['游戏结束', '游戏', '同样几个音，往下走、换小调', '速度', k => { const sc = 1.4 - .7 * k, it = []; let s = .03; for (const [m, L0] of [[72, .22], [67, .22], [63, .22], [62, .3], [60, 1.2]]) { const L = L0 * sc; it.push([s, 音符(mf(m), L + .1, 'sq', .5, 2.5), .35], [s, 乘(振(mf(m - 24), L, 'tri'), 衰(L, 1.5)), .5]); s += L; } return 放(s + .2, it); }],
+  ['激光枪', '科幻', '一个音从高到低飞快滑下，三连发 + 回声', '音高', k => { const top = 1500 + 3500 * k; let ph = 0; const z = 做(.35, t => { const f = top * Math.exp(-t * 16) + 190; ph += f / SR; return (((ph % 1) < .5 ? 1 : -1) * .35 + Math.sin(2 * Math.PI * ph) * .7) * Math.exp(-t * 7) * Math.min(1, t / .003); }); return 回声(放(1.1, [[.03, z, 1], [.3, z, .9], [.52, z, 1]]), .11, .3, 3); }],
+  ['光剑', '科幻', '两个低音锯齿波叠在一起（嗡），挥动时音高和亮度上去', '挥动幅度', k => { const d = 2.2, sw = t => Math.exp(-Math.pow((t - .7) / .14, 2)) + Math.exp(-Math.pow((t - 1.55) / .14, 2)); const f = t => 92 * (1 + .12 * k * sw(t)); const hum = 低通(加(乘(振(f, d, 'saw'), .5), 乘(振(t => f(t) * 1.012, d, 'saw'), .5), 乘(振(t => f(t) * 2.003, d, 'saw'), .35)), t => 700 + 1600 * k * sw(t)); return 乘(加(乘(hum, 做(d, t => .45 + .9 * k * sw(t))), 乘(带通(白噪(d), 2000, 6000), 做(d, t => .02 + .2 * k * sw(t)))), 做(d, t => Math.min(1, t / .25))); }],
+  ['传送', '科幻', '音高一路往上爬，颤得越来越快，最后一阵闪光', '速度', k => { const d = 2, L = 2 - k; let ph = 0, tp = 0; const tone = 做(d, t => { const u = Math.min(1, t / L); ph += 180 * Math.pow(12, u) / SR; tp += (5 + 40 * u) / SR; return (Math.sin(2 * Math.PI * ph) + .4 * Math.sin(3 * Math.PI * ph)) * (.5 + .5 * Math.sin(2 * Math.PI * tp)) * Math.pow(u, .7) * Math.min(1, (d - t) / .4) * .6; }); return 加(tone, 乘(星星(d, 29, 3000, 9000, 30), 做(d, t => Math.min(1, Math.max(0, (t - L * .6) / .4))))); }],
+  ['飞船引擎', '科幻', '几个低音叠在一起，慢慢起伏', '转速', k => { const d = 2, f = 40 + 40 * k; const body = 乘(低通(加(振(f, d, 'saw'), 振(f * 1.011, d, 'saw'), 乘(振(f * 2.007, d, 'saw'), .5)), 500), .35); return 乘(加(body, 乘(低通(褐噪(d), 160), .5), 乘(振(1760, d), .03)), 做(d, t => (.75 + .25 * Math.sin(2 * Math.PI * (2 + 3 * k) * t)) * Math.min(1, t / .4))); }],
+  ['飞船掠过', '科幻', '由远到近再远：越近越响，靠近时音高高、远去时音高低（多普勒）', '飞多快', k => { const d = 2.4, t0 = 1.1, dist = 25, v = 40 + 120 * k, c = 343; const r = t => Math.hypot(v * (t - t0), dist); const ratio = t => c / (c + v * v * (t - t0) / r(t)); const tone = 低通(加(振(t => 170 * ratio(t), d, 'saw'), 乘(振(t => 340 * ratio(t), d, 'saw'), .6)), 1400); return 乘(加(乘(tone, .35), 乘(低通(褐噪(d), 300), .5)), 做(d, t => Math.pow(dist / r(t), 1.2))); }],
+  ['电流', '科幻', '120 赫兹的嗡嗡 + 随机闪断 + 噼啪', '闪断多快', k => { const d = 1.6, w = 游走(d, 6 + 30 * k, 41); const fl = 做(d, (t, i) => w[i] > .35 ? 1 : 0); const fls = 低通(fl, 200, 1); const buzz = 低通(加(乘(振(120, d, 'sq'), .5), 乘(振(240, d, 'saw'), .3)), 3500); const it = []; for (let i = 0; i < 60; i++) it.push([范(0, d - .01), 做(200 / SR, (t, j) => (随() * 2 - 1) * Math.exp(-j / 30)), 1]); return 乘(加(乘(buzz, .8), 乘(高通(放(d, it), 2500), .7)), fls); }],
+  ['雷达', '科幻', '一声「叮」 + 一串回声', '回声多远', k => { const ping = 乘(振(1400, .18), 衰(.18, 18, .004)); return 混响(回声(放(2.2, [[0, ping, 1]]), .15 + .4 * k, .45, 4), 1.8, .35); }],
+  ['警报', '科幻', '音高一遍遍往上扫', '扫多快', k => { const d = 2, P = .9 - .65 * k; const f = t => 520 + 520 * ((t / P) % 1); return 乘(低通(加(乘(振(f, d, 'sq'), .4), 乘(振(t => f(t) * .5, d, 'saw'), .3)), 3000), 做(d, t => Math.min(1, t / .02))); }],
+  ['机器人', '科幻', '一串随机高低的「哔哔」', '说话快慢', k => { const it = []; let s = .03; while (s < 1.4) { const L = 范(.05, .13) * (1.5 - k), a = 范(700, 3200), b = 范(700, 3200), slide = 随() < .5; let ph = 0; it.push([s, 做(L, t => { const f = slide ? a + (b - a) * Math.pow(t / L, 2) : a; ph += f / SR; return (Math.sin(2 * Math.PI * ph) * .7 + ((ph % 1) < .3 ? .15 : -.15)) * Math.pow(Math.sin(Math.PI * t / L), .3); }), 1]); s += L + 范(.01, .06); } return 放(1.6, it); }],
+  ['超空间跳跃', '科幻', '越来越高、越来越响，然后一声「轰」', '蓄力多久', k => { const L = .8 + 1.2 * k, d = L + 1.2; let ph = 0; const r = 加(乘(做(d, t => { const u = Math.min(1, t / L); ph += 60 * Math.pow(20, u) / SR; return (2 * (ph % 1) - 1) * .3; }), 1), 乘(窄带(白噪(d), t => 200 + 5000 * Math.pow(Math.min(1, t / L), 2), 4), .8)); const rr = 乘(r, 做(d, t => t < L ? Math.pow(t / L, 2) : 0)); const boom = 乘(加(乘(低通(褐噪(d), 200), 1.3), 振(t => 38 + 60 * Math.exp(-Math.max(0, t - L) * 5), d)), 做(d, t => t >= L ? Math.exp(-(t - L) * 1.6) : 0)); return 加(rr, 混响(boom, 1.5, .3)); }],
+  ['？谜题', '猜猜看', '每一下的间隔是上一下的 0.8 倍，声音也越来越小……这是什么？（答案：乒乓球落地弹跳）', '弹性', k => { const it = []; let s = .05, gap = .42, g = 1; const r = .7 + .2 * k; while (s < 2.3 && gap > .012) { it.push([s, 加(乘(振(1250, .05), 衰(.05, 160)), 乘(带通(白噪(.05), 2500, 9000), 衰(.05, 500), .6)), g]); s += gap; gap *= r; g *= .88; } return 混响(放(2.4, it), .5, .18); }],
+];
+
+// ---------- 播放 + 画波形 + 频谱 ----------
+let 音境, 分析, 当前源;
+function 境() { if (!音境) { 音境 = new (window.AudioContext || window.webkitAudioContext)(); 分析 = 音境.createAnalyser(); 分析.fftSize = 512; 分析.connect(音境.destination); } if (音境.state === 'suspended') 音境.resume(); return 音境; }
+function 归一(x, 峰 = .9) { let m = 0; for (const v of x) if (Math.abs(v) > m) m = Math.abs(v); if (m > 0 && isFinite(m)) for (let i = 0; i < x.length; i++) x[i] = x[i] / m * 峰; return x; }
+function 播(x) {
+  归一(x); 画波(x);
+  try { const a = 境(), b = a.createBuffer(1, x.length, SR); b.copyToChannel(x, 0); if (当前源) try { 当前源.stop(); } catch (e) {} const s = a.createBufferSource(); s.buffer = b; s.connect(分析); s.start(); 当前源 = s; } catch (e) { console.warn(e); }
+  return x;
+}
+// 声谱图配色：黑 → 紫 → 红 → 橙 → 浅黄（越亮越响）
+const 谱色表 = [[0, 0, 0, 4], [0.25, 87, 16, 110], [0.5, 188, 55, 84], [0.75, 249, 142, 9], [1, 252, 255, 164]];
+function 谱色(v) {
+  for (let i = 1; i < 谱色表.length; i++) if (v <= 谱色表[i][0]) { const [a0, r0, g0, b0] = 谱色表[i - 1], [a1, r1, g1, b1] = 谱色表[i], k = (v - a0) / (a1 - a0); return `rgb(${r0 + (r1 - r0) * k | 0},${g0 + (g1 - g0) * k | 0},${b0 + (b1 - b0) * k | 0})`; }
+  return 'rgb(252,255,164)';
+}
+function 波底(g, W, H) {
+  const 底 = g.createLinearGradient(0, 0, 0, H); 底.addColorStop(0, '#0b0f1e'); 底.addColorStop(1, '#070912');
+  g.fillStyle = 底; g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(120,160,255,.08)'; g.lineWidth = 1; for (let y = H / 4; y < H; y += H / 4) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+}
+function 画波(x) {
+  const c = document.getElementById('wave'), g = c.getContext('2d'), W = c.width, H = c.height;
+  波底(g, W, H);
+  // 上下包络填一层淡色，再描一条发光的线
+  const 上 = [], 下 = [];
+  for (let px = 0; px < W; px++) { const a = Math.floor(px / W * x.length), b = Math.max(a + 1, Math.floor((px + 1) / W * x.length)); let lo = 0, hi = 0; for (let i = a; i < b && i < x.length; i++) { if (x[i] < lo) lo = x[i]; if (x[i] > hi) hi = x[i]; } 上.push(H / 2 - hi * H * 0.45); 下.push(H / 2 - lo * H * 0.45); }
+  const 渐 = g.createLinearGradient(0, 0, W, 0); 渐.addColorStop(0, '#4d8dff'); 渐.addColorStop(0.5, '#3fd4c8'); 渐.addColorStop(1, '#5cff8a');
+  g.fillStyle = 'rgba(77,141,255,.22)'; g.beginPath(); 上.forEach((y, i) => i ? g.lineTo(i, y) : g.moveTo(i, y)); for (let i = 下.length - 1; i >= 0; i--) g.lineTo(i, 下[i]); g.closePath(); g.fill();
+  g.shadowColor = '#4dc8ff'; g.shadowBlur = 8; g.strokeStyle = 渐; g.lineWidth = 1.6; g.beginPath();
+  for (let px = 0; px < W; px++) { g.moveTo(px + .5, 上[px]); g.lineTo(px + .5, 下[px] + 1); }
+  g.stroke(); g.shadowBlur = 0;
+  g.fillStyle = '#9fb0d8'; g.font = '700 12px system-ui'; g.fillText(`波形：${(x.length / SR).toFixed(2)} 秒，${x.length.toLocaleString()} 个数（每秒 ${SR} 个）`, 8, 16);
+}
+{ const c = document.getElementById('wave'), g = c.getContext('2d'); 波底(g, c.width, c.height); g.strokeStyle = 'rgba(77,200,255,.5)'; g.beginPath(); g.moveTo(0, c.height / 2); g.lineTo(c.width, c.height / 2); g.stroke(); g.fillStyle = '#9fb0d8'; g.font = '700 12px system-ui'; g.fillText('波形：点下面任意一个「听」，这里画出那串数字', 8, 16); }
+const 谱 = document.getElementById('spec'), 谱g = 谱.getContext('2d');
+function 画谱() {
+  if (分析) { const d = new Uint8Array(分析.frequencyBinCount); 分析.getByteFrequencyData(d);
+    谱g.drawImage(谱, -2, 0); const H = 谱.height; for (let y = 0; y < H; y++) { const v = d[Math.floor((1 - y / H) * d.length * .8)] / 255; 谱g.fillStyle = 谱色(v); 谱g.fillRect(谱.width - 4, y, 2, 1); }
+    谱g.fillStyle = '#4dc8ff'; 谱g.fillRect(谱.width - 2, 0, 2, H);   // 右边一道亮线：「现在」
+    谱g.fillStyle = 'rgba(0,0,4,.75)'; 谱g.fillRect(0, 0, 330, 22); 谱g.fillStyle = '#c8b8e8'; 谱g.font = '700 12px system-ui'; 谱g.fillText('声谱图：越亮越响，越往上越尖（从右往左滚）', 8, 15);
+  }
+  requestAnimationFrame(画谱);
+}
+谱g.fillStyle = '#000004'; 谱g.fillRect(0, 0, 谱.width, 谱.height); 谱g.fillStyle = '#c8b8e8'; 谱g.font = '700 12px system-ui'; 谱g.fillText('声谱图：越亮越响，越往上越尖（从右往左滚）', 8, 15);
+谱g.fillStyle = '#6a5a8a'; 谱g.textAlign = 'right'; 谱g.fillText('高音', 谱.width - 8, 15); 谱g.fillText('低音', 谱.width - 8, 谱.height - 6); 谱g.textAlign = 'left';
+requestAnimationFrame(画谱);
+
+// ---------- ① 四块积木 ----------
+const $ = id => document.getElementById(id);
+$('b1f').oninput = () => $('b1v').textContent = $('b1f').value + ' 赫兹（每秒振动这么多次）'; $('b1f').oninput();
+$('b1').onclick = () => 播(乘(振(+$('b1f').value, 1.2), 做(1.2, t => Math.min(1, t / .01, (1.2 - t) / .05))));
+$('b2w').onclick = () => 播(乘(白噪(1.2), .5)); $('b2p').onclick = () => 播(粉噪(1.2)); $('b2b').onclick = () => 播(褐噪(1.2));
+const 包络音 = () => { const a = +$('b3a').value, dc = +$('b3d').value, d = a + dc * 3; return 播(乘(加(振(330, d), 乘(振(660, d), .3)), 做(d, t => t < a ? t / a : Math.exp(-(t - a) / dc)))); };
+$('b3').onclick = 包络音;
+$('b3k').onclick = () => { $('b3a').value = .003; $('b3d').value = .15; 包络音(); };
+$('b3c').onclick = () => { $('b3a').value = .6; $('b3d').value = 1.2; 包络音(); };
+$('b4').onclick = () => { const L = +$('b4s').value; 播(乘(窄带(白噪(L), t => 500 + 4000 * Math.pow(Math.sin(Math.PI * t / L), 2), 1.6), 做(L, t => Math.pow(Math.sin(Math.PI * t / L), 1.3)))); };
+$('c1').onclick = () => 播(共振([2093, 2637, 3136, 4186], [8, 9, 11, 14], [1, .7, .5, .3], 1.2));
+$('c2').onclick = () => 播(共振([220, 440, 660, 880, 1100, 1320], [1.5, 2, 2.6, 3.2, 4, 5], [1, .5, .33, .25, .2, .16], 2));
+$('c3').onclick = () => 播(钟(330, 2.5));
+$('c4').onclick = () => 播(放(3, [0, 3, 5, 7, 10, 12].map((m, i) => [i * .35, 共振([1, 2, 2.76, 3.9, 5.4, 6.8, 8.9].map(r => r * mf(60 + m)), [1.6, 2.2, 3, 4, 5, 6, 7], [1, .45, .5, .25, .18, .1, .08], 1.8), .5])));
+$('z1').oninput = () => $('z1v').textContent = `圈长 ${$('z1').value} 个数 → 约 ${Math.round(SR / $('z1').value)} 赫兹`; $('z1').oninput();
+$('z').onclick = () => 播(拨弦(SR / +$('z1').value, 2, +$('z2').value));
+$('zg').onclick = () => 播(混响(放(2.6, [74, 76, 78, 81, 83, 86, 88, 90, 93, 95].map((m, i) => [.05 + i * .06, 拨弦(mf(m - 12), 1.8, +$('z2').value), .5])), 1.6, .25));
+$('m').onclick = () => { const 表 = $('m7').checked ? 七声 : 五声, it = []; let s = .05; let 上一个 = 2;
+  for (let j = 0; j < 14; j++) { 上一个 = Math.max(0, Math.min(表.length * 2 - 1, 上一个 + Math.round((随() - .5) * 4))); const m = 62 + 表[上一个 % 表.length] + 12 * Math.floor(上一个 / 表.length); const L = 随() < .3 ? .5 : .25; it.push([s, 拨弦(mf(m), 1.6, .996), .5]); s += L; }
+  播(混响(放(s + 1.5, it), 2, +$('mv').value)); };
+
+// ---------- ② 声音库 ----------
+let 选中 = 0;
+const 分类 = [...new Set(库.map(x => x[1]))];
+$('lib').innerHTML = 分类.map(c => `<h2>${c}</h2><div class="grid">${库.map((x, i) => x[1] === c ? `<button data-i="${i}">${x[0]}<small>${x[2].slice(0, 16)}…</small></button>` : '').join('')}</div>`).join('');
+function 放库(i) { 选中 = i; const [名, , 做法, 参] = 库[i]; $('lName').textContent = 名; $('lHow').textContent = 做法; $('lPar').textContent = 参;
+  随 = 种子(i + 1); 播(库[i][4](+$('lK').value)); document.querySelectorAll('#lib button').forEach(b => b.classList.toggle('on', +b.dataset.i === i)); }
+$('lib').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { $('lK').value = .5; 放库(+b.dataset.i); } });
+$('lK').onchange = () => 放库(选中); $('lPlay').onclick = () => 放库(选中);
+
+// ---------- ③ 配音和让路 ----------
+let 配乐源, 配乐增益, 配乐开 = false, 说话中 = false, 增益记录 = [];
+function 做配乐() { 随 = 种子(99); const it = []; let s = 0; const 和 = [0, 7, 9, 4]; for (let bar = 0; bar < 4; bar++) for (let j = 0; j < 8; j++) { const m = 62 + 五声[Math.floor(随() * 5)] + (随() < .3 ? 12 : 0); it.push([s, 拨弦(mf(m), 1.2, .995), .35]); if (j === 0) it.push([s, 拨弦(mf(38 + 和[bar]), 2, .998), .6]); s += .25; } return 归一(混响(放(8, it), 2, .3), .7); }
+$('vMus').onclick = () => { const a = 境(); if (配乐开) { 配乐源.stop(); 配乐开 = false; return; }
+  const x = 做配乐(), b = a.createBuffer(1, x.length, SR); b.copyToChannel(x, 0); 配乐源 = a.createBufferSource(); 配乐源.buffer = b; 配乐源.loop = true; 配乐增益 = a.createGain(); 配乐增益.gain.value = 1; 配乐源.connect(配乐增益).connect(分析); 配乐源.start(); 配乐开 = true; 画波(x); };
+function 压(下) { if (!配乐增益 || !$('vDuck').checked) return; const g = 配乐增益.gain, t = 音境.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(下 ? 让路.压到 : 1, t + (下 ? 让路.压下秒 : 让路.回来秒)); }
+const 有语音 = 'speechSynthesis' in window;
+function 填声音() { if (!有语音) { $('vV').innerHTML = '<option>（这个浏览器没有语音合成，用「嘀嘀」代替人声）</option>'; return; }
+  const vs = speechSynthesis.getVoices().filter(v => /zh|cmn|yue/i.test(v.lang)); $('vV').innerHTML = (vs.length ? vs : speechSynthesis.getVoices()).map((v, i) => `<option value="${v.name}">${v.name}（${v.lang}）</option>`).join('') || '<option>（没有找到中文声音，用「嘀嘀」代替人声）</option>'; }
+if (有语音) speechSynthesis.onvoiceschanged = 填声音; 填声音();
+function 说(慢) { 境(); const 字 = '天冷了，记得多穿件衣裳。', rate = 慢 ? Math.min(+$('vR').value, .8) : +$('vR').value;
+  const vs = 有语音 ? speechSynthesis.getVoices() : [], v = vs.find(x => x.name === $('vV').value);
+  if (v) { const u = new SpeechSynthesisUtterance(字); u.voice = v; u.lang = v.lang; u.rate = rate; u.pitch = +$('vP').value;
+    // 一调用就压下去（不等 onstart，有的浏览器不发这个事件）；说完回来，onend 没来就按字数估一个时长兜底
+    clearTimeout(说.兜底); const 完 = () => { if (说.当前 !== u) return; clearTimeout(说.兜底); 说话中 = false; 压(false); }; 说.当前 = u;
+    u.onend = 完; u.onerror = 完; 说.兜底 = setTimeout(完, (字.length * .28 / rate + 1.5) * 1000);
+    speechSynthesis.cancel(); 说话中 = true; 压(true); speechSynthesis.speak(u); }
+  else { const 秒 = 2.2 / rate; 说话中 = true; 压(true); const it = []; for (let s = 0; s < 秒; s += .14 / rate) it.push([s, 乘(振(220 + 80 * 随(), .1), 做(.1, t => Math.sin(Math.PI * t / .1))), .6]); 播(放(秒, it)); setTimeout(() => { 说话中 = false; 压(false); }, 秒 * 1000); }
+  $('vOut').innerHTML = `语速 ${rate.toFixed(2)}${慢 ? '（给老人家放慢）' : ''}。${$('vDuck').checked ? '说话时配乐在 ' + 让路.压下秒 + ' 秒内压到 ' + 让路.压到 * 100 + '%，说完 ' + 让路.回来秒 + ' 秒回来——下面这条线就是配乐的音量。' : '没开让路：配乐和人声抢在一起。'}`; }
+$('vSay').onclick = () => 说(false); $('vOld').onclick = () => 说(true);
+$('vR').oninput = () => $('vRv').textContent = '×' + $('vR').value; $('vR').oninput();
+function 画增益() { const c = $('vC'), g = c.getContext('2d'), W = c.width, H = c.height; 增益记录.push(配乐增益 && 配乐开 ? 配乐增益.gain.value : 0); if (增益记录.length > W / 2) 增益记录.shift();
+  g.fillStyle = '#070912'; g.fillRect(0, 0, W, H); g.strokeStyle = '#5cff8a'; g.shadowColor = '#5cff8a'; g.shadowBlur = 8; g.lineWidth = 2.5; g.beginPath(); 增益记录.forEach((v, i) => { const y = H - 10 - v * (H - 30); i ? g.lineTo(i * 2, y) : g.moveTo(i * 2, y); }); g.stroke();
+  g.shadowBlur = 0; g.fillStyle = '#9fb0d8'; g.font = '700 12px system-ui'; g.fillText('配乐音量（绿线）' + (说话中 ? '　● 正在说话' : ''), 6, 14); requestAnimationFrame(画增益); }
+requestAnimationFrame(画增益);
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b)); document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t)); });
+</script>
+</body>
+</html>

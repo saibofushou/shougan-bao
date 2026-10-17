@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>08 镜头与视角 · 小例子</title>
+<style>
+:root{--bg:#07081a;--panel:rgba(18,18,40,.92);--line:#34356a;--txt:#eceaff;--dim:#a2a0c8;--acc:#ffc84a}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% 30%,#241a4a,var(--bg) 65%);color:var(--txt);font:14px/1.5 system-ui,sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px}
+#side{flex:0 1 300px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+#stage{flex:1 1 440px;min-width:280px}
+canvas{width:100%;max-width:960px;border-radius:10px;display:block;background:#000}
+h1{font-size:16px;margin:0 0 4px}
+h2{font-size:12px;color:var(--acc);margin:10px 0 2px;font-weight:600}
+.tip{color:var(--dim);font-size:12px;margin:0 0 6px}
+button{background:#252a35;color:var(--txt);border:1px solid #363c4a;border-radius:6px;padding:5px 9px;cursor:pointer}
+button:hover,button.on{border-color:var(--acc)}
+button.on{background:#3a3320}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#info{font-size:13px;background:#10131a;border-radius:8px;padding:8px;margin-top:8px}
+#info b{color:var(--acc)}
+#pad{display:flex;gap:6px;margin-top:8px}
+#pad button{flex:1;padding:12px;touch-action:none}
+label{display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>08 镜头与视角</h1>
+  <p class="tip">同一个场景，只换摄像机。A/D 前后走，W/S 左右挪。左上角小地图画出摄像机在哪、朝哪看。</p>
+  <h2>八种视角</h2>
+  <div class="row" id="views"></div>
+  <h2>把游戏拍成电影</h2>
+  <div class="row"><button id="rec">直接录（一个机位）</button><button id="film">电影拍法</button></div>
+  <label><input type="checkbox" id="map" checked> 显示小地图</label>
+  <div id="info"></div>
+</div>
+<div id="stage"><canvas id="c" width="960" height="540"></canvas>
+  <div id="pad"><button data-k="a">← 后退 A</button><button data-k="w">↑ W</button><button data-k="s">↓ S</button><button data-k="d">前进 D →</button></div>
+</div>
+
+<script>
+// ===================== 参数表：每种视角 = 摄像机放哪、跟着谁、朝哪看 =====================
+// 位置 / 看向 都是函数：传入主角位置 h = {x, z}，返回 [x, y, z]
+// 正交: 给「画面高几格」就是没有近大远小；不给就是透视，用 视野角（度）
+const 视角表 = {
+  横版:   {放: h => [h.x, 1.6, 30],          看: h => [h.x, 1.6, 0],          正交: 7,  上: [0, 1, 0], 说: '从侧面看，跳多高、跳多远一目了然', 适合: '跳跃、动作', 代表: '超级马里奥兄弟（1985）、空洞骑士'},
+  俯视:   {放: h => [h.x, 30, 0],             看: h => [h.x, 0, 0],            正交: 10, 上: [0, 0, -1], 说: '从头顶往下看，谁在包围你、路往哪走，一眼看清', 适合: '探索、俯视射击', 代表: '塞尔达传说（1986）'},
+  斜45度: {放: h => [h.x - 20, 20, 20],       看: h => [h.x, 0.4, 0],          正交: 9,  上: [0, 1, 0], 说: '没有近大远小，却有立体感', 适合: '刷怪、经营', 代表: '暗黑破坏神、哈迪斯'},
+  上帝:   {放: h => [h.x - 9, 17, 15],        看: h => [h.x + 2, 0, 0],        视野: 45, 上: [0, 1, 0], 说: '你不再是某一个人，而是在指挥和建造', 适合: '策略、建造', 代表: '模拟城市、星际争霸'},
+  第一人称: {放: h => [h.x + 0.1, 1.55, h.z], 看: h => [h.x + 5, 1.35, h.z],   视野: 70, 上: [0, 1, 0], 说: '摄像机就在眼睛里，代入感最强、瞄准最准，可你看不见自己', 适合: '射击、恐怖', 代表: '毁灭战士（1993）', 不画自己: true},
+  固定镜头: {放: () => [4, 3, -6],            看: h => [h.x, 1, h.z],          视野: 50, 上: [0, 1, 0], 说: '镜头钉在墙角。拐角后面看不见，反而最吓人（往前走，墙后的怪你看不到）', 适合: '恐怖、解谜', 代表: '早期的生化危机'},
+  第三人称: {放: h => [h.x - 4.4, 2.5, h.z],  看: h => [h.x + 2.6, 1, h.z],    视野: 55, 上: [0, 1, 0], 说: '跟在背后，看得见角色的动作和衣服', 适合: '动作冒险、开放世界', 代表: '古墓丽影（1996）、原神、黑神话：悟空'},
+  越肩:   {放: h => [h.x - 2.4, 1.85, h.z + 0.95], 看: h => [h.x + 6, 1.3, h.z + 0.5], 视野: 50, 上: [0, 1, 0], 说: '镜头推到肩膀旁边：既看得见自己，又好瞄准', 适合: '第三人称射击', 代表: '生化危机4（2005）之后的很多射击游戏', 准星: true},
+};
+// 电影拍法：按时间切镜头（秒）。主角自己往怪物走过去，最后一刀。
+const 分镜 = [
+  {到: 2.2, 名: '全景：先交代在哪', 机: h => ({放: [h.x - 9, 6, h.z + 9], 看: [h.x + 2, 0.8, h.z], 视野: 42})},
+  {到: 4.2, 名: '特写：低机位看脸', 机: h => ({放: [h.x + 1.5, 1.1, h.z + 1.1], 看: [h.x, 1.45, h.z], 视野: 30})},
+  {到: 6.0, 名: '反打：从怪物身后看主角', 机: (h, m) => ({放: [m.x + 1.6, 1.2, m.z + 0.6], 看: [h.x, 1.15, h.z], 视野: 40})},
+  {到: 8.6, 名: '慢动作：出刀', 机: h => ({放: [h.x + 0.9, 1.2, h.z + 3.2], 看: [h.x + 0.9, 1.1, h.z], 视野: 40}), 慢: 0.3},
+  {到: 10,  名: '收：拉远，定住', 机: h => ({放: [h.x - 3, 2.2, h.z + 6.5], 看: [h.x + 0.8, 1, h.z], 视野: 40})},
+];
+// =========================================================================================
+
+// ---------------- 场景：一堆方块 ----------------
+const 盒们 = [];   // {c:[x,y,z] 中心, s:[w,h,d] 尺寸, 色}
+const 盒 = (x, y, z, w, h, d, 色, 组 = '景') => 盒们.push({c: [x, y, z], s: [w, h, d], 色, 组});
+盒(17, 1.1, -2.8, 3, 2.2, 2.2, '#c99a6b'); 盒(17, 2.5, -2.8, 3.3, 0.6, 2.5, '#9e4b3c');     // 小房子 + 屋顶
+盒(10.2, 1.5, -1.25, 0.4, 3, 5.5, '#6f7787');                                              // 墙：固定镜头时挡住怪
+for (const [x, z] of [[1, 4], [-1, -3.4], [12.5, -4], [2, -1.8], [20.5, 2.6], [4, 4.3]]) { 盒(x, 0.6, z, 0.3, 1.2, 0.3, '#6b4a2e'); 盒(x, 1.6, z, 1.3, 1.1, 1.3, '#3f8a4a'); }
+盒(16, 0.4, 3.6, 0.8, 0.8, 0.8, '#b08a3a');                                              // 宝箱
+const 主角 = {x: 2, z: 0, 走: 0, 挥: 0};
+const 怪 = {x: 14, z: 0, 晃: 0};
+function 主角盒() {
+  const {x, z, 走, 挥} = 主角, 摆 = Math.sin(走 * 9) * 0.18;
+  return [
+    {c: [x + 摆, 0.3, z - 0.13], s: [0.18, 0.6, 0.18], 色: '#3d4f7a'}, {c: [x - 摆, 0.3, z + 0.13], s: [0.18, 0.6, 0.18], 色: '#3d4f7a'},
+    {c: [x, 0.95, z], s: [0.36, 0.7, 0.5], 色: '#3c8cff'}, {c: [x, 1.48, z], s: [0.36, 0.36, 0.36], 色: '#f0c8a0'},
+    {c: [x + 0.19, 1.52, z - 0.09], s: [0.02, 0.06, 0.06], 色: '#222'}, {c: [x + 0.19, 1.52, z + 0.09], s: [0.02, 0.06, 0.06], 色: '#222'},
+    {c: [x + 0.35 + 挥 * 0.5, 1.0 + 挥 * 0.2, z + 0.32], s: [0.7 + 挥 * 0.4, 0.06, 0.06], 色: '#e8f0ff'},
+  ];
+}
+function 怪盒() {
+  const 弹 = Math.abs(Math.sin(怪.晃 * 3)) * 0.15;
+  return [
+    {c: [怪.x, 0.45 + 弹, 怪.z], s: [1, 0.9 - 弹 * 0.5, 1], 色: '#45c46a'},
+    {c: [怪.x - 0.51, 0.6 + 弹, 怪.z - 0.2], s: [0.03, 0.14, 0.12], 色: '#111'}, {c: [怪.x - 0.51, 0.6 + 弹, 怪.z + 0.2], s: [0.03, 0.14, 0.12], 色: '#111'},
+  ];
+}
+
+// ---------------- 小小 3D：投影 + 画家算法 ----------------
+const cv = document.getElementById('c'), g = cv.getContext('2d'), W = cv.width, H = cv.height;
+const 减 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], 点乘 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const 叉 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const 单位 = a => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+let 机;   // 当前摄像机 {放, 前, 右, 上, 正交?, F}
+function 设机(放, 看, 上, 视野, 正交) {
+  const 前 = 单位(减(看, 放)), 右 = 单位(叉(前, 上)), 真上 = 叉(右, 前);
+  机 = {放, 前, 右, 上: 真上, 正交, F: 正交 ? H / 正交 : (H / 2) / Math.tan(视野 * Math.PI / 360)};
+}
+function 投(p) {
+  const d = 减(p, 机.放), x = 点乘(d, 机.右), y = 点乘(d, 机.上), z = 点乘(d, 机.前);
+  if (机.正交) return [W / 2 + x * 机.F, H / 2 - y * 机.F, z];
+  return [W / 2 + x / z * 机.F, H / 2 - y / z * 机.F, z];   // 近大远小：除以距离
+}
+const 光 = 单位([-0.4, 1, 0.6]);
+function 调色(hex, k) { const n = parseInt(hex.slice(1), 16); return `rgb(${(n >> 16) * k | 0},${(n >> 8 & 255) * k | 0},${(n & 255) * k | 0})`; }
+const 面法 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+function 盒面(b, 面们) {
+  const [cx, cy, cz] = b.c, [w, h, d] = b.s.map(v => v / 2);
+  for (const n of 面法) {
+    const 中 = [cx + n[0] * w, cy + n[1] * h, cz + n[2] * d];
+    const 朝 = 机.正交 ? -点乘(n, 机.前) : -点乘(n, 减(中, 机.放));
+    if (朝 <= 0) continue;   // 背面不画
+    const a = n[0] ? 1 : 0, 轴 = n[0] ? [[0, h, d], [0, h, -d], [0, -h, -d], [0, -h, d]] : n[1] ? [[w, 0, d], [w, 0, -d], [-w, 0, -d], [-w, 0, d]] : [[w, h, 0], [-w, h, 0], [-w, -h, 0], [w, -h, 0]];
+    const 点 = 轴.map(o => 投([中[0] + o[0], 中[1] + o[1], 中[2] + o[2]]));
+    if (!机.正交 && 点.some(p => p[2] < 0.08)) continue;   // 穿到镜头后面的面不画
+    面们.push({点, 深: 点.reduce((s, p) => s + p[2], 0) / 4, 色: 调色(b.色, 0.5 + 0.5 * Math.max(0, 点乘(n, 光)))});
+  }
+}
+function 画场景(不画自己) {
+  // 天和地
+  const 天 = g.createLinearGradient(0, 0, 0, H); 天.addColorStop(0, '#3e4f8e'); 天.addColorStop(0.55, '#a98fb8'); 天.addColorStop(1, '#f4c99a');   // 傍晚的天：上蓝紫、下暖橙
+  g.fillStyle = 天; g.fillRect(0, 0, W, H);
+  // 地面：一格一块，先画（永远在最底下）
+  const 地 = [];
+  for (let x = -6; x < 26; x++) for (let z = -5; z < 5; z++) {
+    const 点 = [[x, 0, z], [x + 1, 0, z], [x + 1, 0, z + 1], [x, 0, z + 1]].map(投);
+    if (!机.正交 && 点.some(p => p[2] < 0.08)) continue;
+    地.push({点, 深: 点.reduce((s, p) => s + p[2], 0) / 4, 色: (x + z) & 1 ? '#4f7a3c' : '#578444'});
+  }
+  地.sort((a, b) => b.深 - a.深).forEach(画面);
+  // 影子
+  for (const [x, z, r] of [[主角.x, 主角.z, 0.35], [怪.x, 怪.z, 0.6]]) {
+    const 点 = []; for (let i = 0; i < 12; i++) 点.push(投([x + Math.cos(i / 12 * 6.283) * r, 0.01, z + Math.sin(i / 12 * 6.283) * r]));
+    if (点.every(p => 机.正交 || p[2] > 0.08)) 画面({点, 色: 'rgba(0,0,0,.25)'});
+  }
+  const 面们 = [];
+  for (const b of 盒们) 盒面(b, 面们);
+  if (!不画自己) for (const b of 主角盒()) 盒面(b, 面们);
+  for (const b of 怪盒()) 盒面(b, 面们);
+  面们.sort((a, b) => b.深 - a.深).forEach(画面);
+}
+function 画面(f) { g.beginPath(); f.点.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.closePath(); g.fillStyle = f.色; g.fill(); if (f.深 !== undefined) { g.strokeStyle = 'rgba(0,0,0,.18)'; g.stroke(); } }
+
+// ---------------- 小地图：从头顶看摄像机在哪 ----------------
+function 小地图(放, 看, 视野, 正交) {
+  const ox = 12, oy = 12, s = 9, mx = x => ox + (x + 6) * s, mz = z => oy + (z + 5) * s;
+  g.fillStyle = 'rgba(10,14,20,.8)'; g.fillRect(ox, oy, 32 * s, 10 * s);
+  for (const b of 盒们) { g.fillStyle = b.色; g.fillRect(mx(b.c[0] - b.s[0] / 2), mz(b.c[2] - b.s[2] / 2), b.s[0] * s, b.s[2] * s); }
+  g.fillStyle = '#3c8cff'; g.fillRect(mx(主角.x) - 3, mz(主角.z) - 3, 6, 6);
+  g.fillStyle = '#45c46a'; g.fillRect(mx(怪.x) - 4, mz(怪.z) - 4, 8, 8);
+  // 摄像机（夹在地图范围内画）+ 视野
+  const cx = Math.max(-6, Math.min(26, 放[0])), cz = Math.max(-5, Math.min(5, 放[2]));
+  const 方 = 单位([看[0] - 放[0], 0.0001, 看[2] - 放[2]]), 长 = 6;
+  g.strokeStyle = '#ffc84a'; g.lineWidth = 1.5;
+  if (Math.hypot(看[0] - 放[0], 看[2] - 放[2]) < 0.5) { g.strokeRect(mx(看[0]) - (正交 || 8) * s * 0.9, mz(看[2]) - (正交 || 8) * s / 2, (正交 || 8) * s * 1.8, (正交 || 8) * s); }  // 从正上方往下看
+  else {
+    const 半 = 正交 ? null : 视野 * Math.PI / 360;
+    for (const sg of [-1, 1]) {
+      g.beginPath(); g.moveTo(mx(cx), mz(cz));
+      if (正交) { const n = [-方[2], 方[0]]; g.moveTo(mx(cx + n[0] * sg * 正交 * 0.9), mz(cz + n[1] * sg * 正交 * 0.9)); g.lineTo(mx(cx + n[0] * sg * 正交 * 0.9 + 方[0] * 长 * 3), mz(cz + n[1] * sg * 正交 * 0.9 + 方[2] * 长 * 3)); }
+      else { const a = Math.atan2(方[2], 方[0]) + sg * 半; g.lineTo(mx(cx + Math.cos(a) * 长), mz(cz + Math.sin(a) * 长)); }
+      g.stroke();
+    }
+  }
+  g.fillStyle = '#ffc84a'; g.beginPath(); g.arc(mx(cx), mz(cz), 4, 0, 7); g.fill();
+  g.font = '11px system-ui'; g.fillStyle = '#ddd'; g.fillText('📷 ' + (cx !== 放[0] || cz !== 放[2] ? '（在地图外，更远/更高）' : '') + '高 ' + 放[1].toFixed(1) + ' 格' + (正交 ? '　正交：没有近大远小' : '　透视 ' + 视野 + '°'), ox + 4, oy + 10 * s + 14);
+}
+
+// ---------------- 状态与操作 ----------------
+let 当前 = '第三人称', 模式 = '玩', 片时 = 0, 上 = performance.now();
+const 键 = {};
+addEventListener('keydown', e => 键[e.key.toLowerCase()] = true);
+addEventListener('keyup', e => 键[e.key.toLowerCase()] = false);
+document.querySelectorAll('#pad button').forEach(b => { b.onpointerdown = e => { e.preventDefault(); 键[b.dataset.k] = true; }; b.onpointerup = b.onpointerleave = () => 键[b.dataset.k] = false; });
+const 视角钮 = document.getElementById('views');
+for (const k in 视角表) { const b = document.createElement('button'); b.textContent = k; b.onclick = () => { 当前 = k; 模式 = '玩'; 刷(); }; 视角钮.appendChild(b); }
+document.getElementById('rec').onclick = () => { 模式 = '录'; 片时 = 0; 主角.x = 2; 主角.z = 0; 刷(); };
+document.getElementById('film').onclick = () => { 模式 = '片'; 片时 = 0; 主角.x = 2; 主角.z = 0; 刷(); };
+function 刷() {
+  [...视角钮.children].forEach(b => b.classList.toggle('on', 模式 === '玩' && b.textContent === 当前));
+  document.getElementById('rec').classList.toggle('on', 模式 === '录'); document.getElementById('film').classList.toggle('on', 模式 === '片');
+  const v = 视角表[当前];
+  document.getElementById('info').innerHTML = 模式 === '玩'
+    ? `<b>${当前}</b>：${v.说}<br>适合：${v.适合}<br>代表：${v.代表}<br><span style="color:#a2a0c8">${v.正交 ? '正交投影（画面高 ' + v.正交 + ' 格）' : '透视，视野 ' + v.视野 + '°'}</span>`
+    : 模式 === '录' ? '<b>直接录</b>：镜头一直跟在背后，一个机位拍到底。' : '<b>电影拍法</b>：全景 → 特写 → 反打 → 慢动作 → 收。导演替你决定看哪、看多久。';
+}
+刷();
+
+function 一步(dt) {
+  怪.晃 += dt;
+  if (模式 === '玩') {
+    const 动 = (键.d ? 1 : 0) - (键.a ? 1 : 0), 侧 = (键.s ? 1 : 0) - (键.w ? 1 : 0);
+    主角.x = Math.max(-2, Math.min(13, 主角.x + 动 * 3 * dt)); 主角.z = Math.max(-4, Math.min(4, 主角.z + 侧 * 3 * dt));
+    if (主角.x > 9.6 && 主角.x < 10.8 && 主角.z < 1.6) 主角.x = 动 > 0 ? 9.6 : 10.8;   // 墙挡路
+    if (动 || 侧) 主角.走 += dt;
+  } else {
+    const 镜 = 分镜.find(s => 片时 < s.到) || 分镜[分镜.length - 1];
+    const 慢 = 模式 === '片' && 镜.慢 ? 镜.慢 : 1;
+    片时 += dt * 慢;
+    if (主角.x < 12.4) { 主角.x += 2 * dt * 慢; 主角.z += (1.8 - 主角.z) * dt * 慢; 主角.走 += dt * 慢; }   // 绕过墙走过去
+    主角.挥 = 片时 > 6.8 && 片时 < 8.6 ? Math.sin((片时 - 6.8) / 1.8 * Math.PI) : 0;
+    if (片时 > 10.5) 片时 = 0, 主角.x = 2, 主角.z = 0;
+  }
+}
+function 画() {
+  let 放, 看, 视野, 正交, 上向 = [0, 1, 0], 不画自己 = false, 名 = '';
+  if (模式 === '玩') { const v = 视角表[当前]; 放 = v.放(主角); 看 = v.看(主角); 视野 = v.视野; 正交 = v.正交; 上向 = v.上; 不画自己 = v.不画自己; }
+  else if (模式 === '录') { 放 = [主角.x - 4.4, 2.5, 主角.z]; 看 = [主角.x + 2.6, 1, 主角.z]; 视野 = 55; }
+  else { const 镜 = 分镜.find(s => 片时 < s.到) || 分镜[分镜.length - 1]; const c = 镜.机(主角, 怪); 放 = c.放; 看 = c.看; 视野 = c.视野; 名 = 镜.名; }
+  设机(放, 看, 上向, 视野, 正交);
+  画场景(不画自己);
+  if (模式 === '玩' && 当前 === '第一人称') {   // 自己的手和刀
+    g.fillStyle = '#f0c8a0'; g.fillRect(W * 0.66, H * 0.78, 70, 140);
+    g.fillStyle = '#e8f0ff'; g.save(); g.translate(W * 0.7, H * 0.8); g.rotate(-0.5 + Math.sin(主角.走 * 9) * 0.05); g.fillRect(-6, -230, 12, 230); g.restore();
+  }
+  if (模式 === '玩' && 视角表[当前].准星) { g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.moveTo(W / 2 - 12, H / 2); g.lineTo(W / 2 + 12, H / 2); g.moveTo(W / 2, H / 2 - 12); g.lineTo(W / 2, H / 2 + 12); g.stroke(); }
+  if (模式 === '片') {   // 电影的样子：调色 + 暗角 + 上下黑边 + 镜头名
+    g.fillStyle = 'rgba(255,150,60,.12)'; g.fillRect(0, 0, W, H);
+    const 角 = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.9); 角.addColorStop(0, 'rgba(0,0,0,0)'); 角.addColorStop(1, 'rgba(0,0,0,.55)'); g.fillStyle = 角; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, 66); g.fillRect(0, H - 66, W, 66);
+    g.fillStyle = '#ddd'; g.font = '15px system-ui'; g.textAlign = 'center'; g.fillText(名, W / 2, H - 28); g.textAlign = 'left';
+  }
+  if (document.getElementById('map').checked && 模式 !== '片') 小地图(放, 看, 视野, 正交);
+}
+function 帧(now) { const dt = Math.max(0, Math.min(0.05, (now - 上) / 1000)); 上 = now; 一步(dt); 画(); requestAnimationFrame(帧); }
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

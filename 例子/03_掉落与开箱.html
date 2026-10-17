@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>03 掉落与开箱 · 小例子</title>
+<style>
+:root{--ink:#4a1f5c;--txt:#4a1f5c;--dim:#8a6a96;--acc:#ff2f78;--panel:#fffaf0}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 60% 20%,#fffbe6,#ffe3c2 55%,#ffb98a);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:4px solid var(--ink);box-shadow:0 6px 0 var(--ink);border-radius:18px;padding:14px}
+#stage{flex:1 1 440px;min-width:280px;max-width:900px}
+canvas{width:100%;border-radius:18px;display:block;cursor:pointer;border:4px solid var(--ink);box-shadow:0 6px 0 var(--ink)}
+h1{font-size:18px;margin:0 0 4px;font-weight:900}
+h2{font-size:13px;color:var(--acc);margin:12px 0 2px;font-weight:900}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+label{display:flex;gap:8px;align-items:flex-start;padding:1px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button{background:#fff;color:var(--ink);border:3px solid var(--ink);border-radius:999px;padding:4px 11px;cursor:pointer;font-weight:900;box-shadow:0 3px 0 var(--ink)}
+button:hover{filter:brightness(1.08)}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+#small,#big{background:#ffd23f}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+input[type=checkbox]{accent-color:#ff2f78;width:16px;height:16px;margin-top:2px}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>03 掉落与开箱：演出跟稀有度成正比</h1>
+  <p class="tip">点按钮掉一件装备或开一个箱子。地上的装备（问号）点一下揭晓是什么，再点一下捡起。声音全是现算的，先点一下画面让浏览器允许出声。</p>
+  <h2>掉一件</h2>
+  <div class="row" id="drops"></div>
+  <h2>开宝箱</h2>
+  <div class="row"><button id="small">小箱子</button><button id="big">大箱子</button></div>
+  <h2>只听声音</h2>
+  <div class="row" id="sounds"></div>
+  <div class="row"><button id="allOff">全关</button><button id="allOn">全开</button></div>
+  <div id="toggles"></div>
+</div>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 稀有度 = [ // 名字、颜色、掉落权重（加起来 1000）、光柱高度、声音：和弦几个音、有没有闪光、有没有低音、回声秒数
+  {名: '普通', 色: '#e8e8e8', 权: 700, 柱: 0,   音: 0, 闪: 0, 低: 0, 尾: 0},
+  {名: '优秀', 色: '#4dff8e', 权: 220, 柱: 0,   音: 2, 闪: 0, 低: 0, 尾: 0.4},
+  {名: '精良', 色: '#4cb6ff', 权: 65,  柱: 0,   音: 3, 闪: 0, 低: 0, 尾: 0.8},
+  {名: '史诗', 色: '#b07bff', 权: 14,  柱: 260, 音: 4, 闪: 1, 低: 0, 尾: 1.3},
+  {名: '传说', 色: '#ff9a1e', 权: 1,   柱: 440, 音: 4, 闪: 1, 低: 1, 尾: 2.4},
+];
+const 参数 = {
+  抛出时长: 0.55, 抛出高度: 130,
+  弹跳: [0.3, 0.1],        // 每次落地弹起的高度（相对抛出高度）
+  和弦根音: 523.25,         // C5，往上走：C E G C
+  和弦: [1, 1.26, 1.5, 2], 和弦间隔: 0.075,
+  落地叮: 1800,             // +150 × 稀有度档位
+  开箱: {
+    小: {憋: 0.35, 件数: [[1, 1]]},                       // [件数, 权重]
+    大: {憋: 1.2,  件数: [[1, 60], [3, 30], [5, 10]]},    // 吸血鬼幸存者式：1 / 3 / 5 件，开之前不知道
+    每件间隔: 0.35,           // 一件一件给，每件音高高一个音阶
+    金币: 60, 金币滚动: 1.2,  // 秒
+  },
+};
+// ===========================================================
+
+const 项 = [
+  ['掉落 9 招', [
+    ['arc', '① 抛出', '沿弧线飞出来，眼睛会跟着走'],
+    ['bounce', '② 弹跳', '落地弹两下，扬一点灰'],
+    ['color', '③ 稀有度颜色', '白绿蓝紫橙'],
+    ['beam', '④ 光柱', '隔着半个屏幕也知道'],
+    ['label', '⑤ 名字标签', '用稀有度颜色写'],
+    ['sound', '⑥ 专属音效', '最便宜，效果最大'],
+    ['split', '⑦ 分开捡', '金币自动飞来，紫橙留在地上'],
+    ['delay', '⑧ 延迟揭晓', '先看颜色，点了才知道是什么'],
+    ['card', '⑨ 详情卡', '捡起弹出卡片'],
+  ]],
+  ['规矩', [
+    ['scale', '演出跟稀有度成正比', '关掉＝白装也放全套，传说就不稀罕了'],
+  ]],
+  ['开宝箱五步', [
+    ['freeze', '① 停下来', '怪全定住、背景变暗'],
+    ['tease', '② 先憋一会儿', '箱子抖、缝里漏光、音往上爬'],
+    ['random', '③ 结果不确定', '1 / 3 / 5 件'],
+    ['onebyone', '④ 一件一件给', '每件音高比上一件高'],
+    ['coins', '⑤ 金币收尾', '哗哗喷、数字往上跳'],
+  ]],
+];
+const on = {};
+const box = document.getElementById('toggles');
+for (const [组, 列] of 项) {
+  const h = document.createElement('h2'); h.textContent = 组; box.appendChild(h);
+  for (const [k, n, s] of 列) {
+    const l = document.createElement('label');
+    l.innerHTML = `<input type="checkbox" data-k="${k}" checked><span>${n}<small>${s}</small></span>`;
+    box.appendChild(l);
+  }
+}
+const 同步 = () => { for (const i of box.querySelectorAll('input')) on[i.dataset.k] = i.checked; };
+box.addEventListener('change', 同步); 同步();
+document.getElementById('allOff').onclick = () => { box.querySelectorAll('input').forEach(i => i.checked = false); 同步(); };
+document.getElementById('allOn').onclick = () => { box.querySelectorAll('input').forEach(i => i.checked = true); 同步(); };
+稀有度.forEach((r, i) => {
+  const b = document.createElement('button'); b.textContent = r.名; b.style.background = r.色; b.onclick = () => 掉(i); document.getElementById('drops').appendChild(b);
+  const s = document.createElement('button'); s.textContent = r.名 + '声'; s.style.background = r.色; s.onclick = () => 掉落声(i, true); document.getElementById('sounds').appendChild(s);
+});
+['落地叮', '和弦', '闪光', '低音'].forEach((n, k) => { const s = document.createElement('button'); s.textContent = '只听' + n; s.onclick = () => 单层(k); document.getElementById('sounds').appendChild(s); });
+document.getElementById('small').onclick = () => 开箱('小');
+document.getElementById('big').onclick = () => 开箱('大');
+
+// ---------------- 声音（WebAudio 现算） ----------------
+let ac = null, 混响 = {};
+function A() { ac = ac || new AudioContext(); if (ac.state === 'suspended') ac.resume(); return ac; }
+function 正弦(f, t0, 长, 量, 衰, 目的 = A().destination, 型 = 'sine') {
+  const o = ac.createOscillator(), v = ac.createGain();
+  o.type = 型; o.frequency.value = f;
+  v.gain.setValueAtTime(0, t0); v.gain.linearRampToValueAtTime(量, t0 + 0.002); v.gain.setTargetAtTime(0, t0 + 0.002, 1 / 衰);
+  o.connect(v).connect(目的); o.start(t0); o.stop(t0 + 长);
+}
+function 回声(秒) { // 用衰减的噪声做一个房间回声
+  A(); const key = 秒.toFixed(1);
+  if (!混响[key]) {
+    const n = ac.sampleRate * 秒, b = ac.createBuffer(2, n, ac.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-3 * i / n); }
+    const cv = ac.createConvolver(); cv.buffer = b; const w = ac.createGain(); w.gain.value = 0.45; cv.connect(w).connect(ac.destination); 混响[key] = cv;
+  }
+  return 混响[key];
+}
+// 第一层：落地叮（三个不成倍数的音，像金属）
+function 叮(f, t0, 出) { for (const [r, a] of [[1, 0.6], [2.76, 0.35], [5.4, 0.2]]) 正弦(f * r, t0, 0.35, a * 0.25, 10 + 6 * r, 出); }
+// 第二层：和弦一个音一个音往上走
+function 琶音(n, t0, 出) { for (let i = 0; i < n; i++) { const f = 参数.和弦根音 * 参数.和弦[i]; 正弦(f, t0 + i * 参数.和弦间隔, 0.9, 0.16, 5.5, 出); 正弦(f * 2, t0 + i * 参数.和弦间隔, 0.9, 0.05, 5.5, 出, 'triangle'); } }
+// 第三层：闪光（一把又高又碎的短音，越往后越高）
+function 闪光(长, t0, 出) { for (let k = 0; k < 40; k++) { const s = Math.random() ** 0.7 * (长 - 0.4), f = (2500 + Math.random() * 5000) * (1 + s / 长); 正弦(f, t0 + s, 0.4, 0.02 + Math.random() * 0.03, 9, 出); } }
+// 第四层：低音一震（下滑的正弦 + 低通噪声）
+function 低音(t0, 出) {
+  const o = ac.createOscillator(), v = ac.createGain();
+  o.frequency.setValueAtTime(140, t0); o.frequency.exponentialRampToValueAtTime(40, t0 + 0.9);
+  v.gain.setValueAtTime(0.5, t0); v.gain.setTargetAtTime(0, t0, 0.2); o.connect(v).connect(出); o.start(t0); o.stop(t0 + 1);
+  const n = ac.createBufferSource(), b = ac.createBuffer(1, ac.sampleRate * 0.6, ac.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1800; const g2 = ac.createGain(); g2.gain.setValueAtTime(0.3, t0); g2.gain.setTargetAtTime(0, t0, 0.14);
+  n.buffer = b; n.connect(f).connect(g2).connect(出); n.start(t0);
+}
+function 掉落声(档, 强制) {
+  if (!on.sound && !强制) return;
+  A(); const t0 = ac.currentTime + 0.01;
+  const r = on.scale || 强制 ? 稀有度[档] : 稀有度[4]; // 规矩关掉：每件都放传说的声音
+  const 出 = ac.createGain(); 出.connect(ac.destination);
+  if (r.尾) 出.connect(回声(r.尾));
+  叮(参数.落地叮 + 150 * 档, t0, 出);
+  if (r.音) 琶音(r.音, t0 + 0.05, 出);
+  if (r.闪) 闪光(r.低 ? 1.3 : 0.9, t0 + 0.12, 出);
+  if (r.低) 低音(t0, 出);
+}
+function 单层(k) { A(); const t0 = ac.currentTime + 0.01, d = ac.destination; [() => 叮(2400, t0, d), () => 琶音(4, t0, d), () => 闪光(1.3, t0, d), () => 低音(t0, d)][k](); }
+function 音(f, 长 = 0.25, 量 = 0.12) { if (!on.sound) return; A(); 正弦(f, ac.currentTime + 0.005, 长, 量, 8, ac.destination, 'triangle'); }
+
+// ---------------- 场景 ----------------
+const W = 820, H = 560, 地 = H - 80;
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * dpr; cv.height = H * dpr;
+const g = cv.getContext('2d');
+const 箱 = {x: 470, 抖: 0, 漏: 0, 开: 0, 大: false};
+const 人 = {x: 110};
+let 物 = [], 尘 = [], 币 = [], 怪 = [], 卡 = null, 时 = 0, 金 = 0, 显金 = 0, 暗 = 0, 定住 = false, 序列 = [];
+for (let i = 0; i < 9; i++) 怪.push({x: Math.random() * W, y: 110 + Math.random() * 240, vx: (Math.random() - 0.5) * 140, ph: Math.random() * 6});
+const 名字 = [['生锈铁剑', '木棍'], ['青锋剑', '猎手短弓'], ['寒霜之刃', '蓝晶法杖'], ['暗影长剑', '星辰之冠'], ['焚天 · 炎魔之刃', '永夜 · 龙魂弓']];
+
+function 掉(档, 起x = 箱.x, 延迟 = 0) {
+  const r = 稀有度[档], 落x = 起x + (Math.random() < 0.5 ? -1 : 1) * (90 + Math.random() * 120);
+  物.push({档, 名: 名字[档][Math.random() * 2 | 0], x0: 起x, y0: 地 - 70, 落x, t: 时 + 延迟, 揭: !on.delay, 捡: false});
+  if (!延迟) 掉落提示(档);
+}
+function 掉落提示(档) { setTimeout(() => 掉落声(档), (on.arc ? 参数.抛出时长 : 0) * 1000); }
+
+function 开箱(种) {
+  if (序列.length) return;
+  const 配 = 参数.开箱[种];
+  箱.大 = 种 === '大'; 箱.开 = 0;
+  let 件 = 1;
+  if (on.random) { let r = Math.random() * 配.件数.reduce((s, x) => s + x[1], 0); for (const [n, w] of 配.件数) { if ((r -= w) < 0) { 件 = n; break; } } }
+  else 件 = 箱.大 ? 3 : 1;
+  const 开始 = 时;
+  if (on.freeze) 定住 = true;
+  const 憋 = on.tease ? 配.憋 : 0.05;
+  // 憋：箱子抖、光从缝里漏、音一个个往上爬
+  if (on.tease) for (let i = 0; i * 0.15 < 憋; i++) 序列.push({t: 开始 + i * 0.15, f: () => 音(392 * Math.pow(2, i / 12 * 2), 0.2, 0.08)});
+  序列.push({t: 开始 + 憋, f: () => { 箱.开 = 1; 音(784, 0.3, 0.12); }});
+  for (let i = 0; i < 件; i++) {
+    const 档 = 抽档(箱.大), dt = on.onebyone ? 0.15 + i * 参数.开箱.每件间隔 : 0.15;
+    序列.push({t: 开始 + 憋 + dt, f: () => { 掉(档, 箱.x, 0); if (on.onebyone) 音(523 * Math.pow(2, i * 2 / 12), 0.25, 0.1); }});
+  }
+  const 末 = 开始 + 憋 + 0.15 + (on.onebyone ? 件 * 参数.开箱.每件间隔 : 0.1);
+  序列.push({t: 末, f: () => { if (on.coins) { for (let i = 0; i < 参数.开箱.金币; i++) 币.push({x: 箱.x, y: 地 - 60, vx: (Math.random() - 0.5) * 500, vy: -300 - Math.random() * 400, t: 时}); 金 += 件 * 120; } else 金 += 件 * 120; }});
+  序列.push({t: 末 + (on.coins ? 参数.开箱.金币滚动 : 0.1), f: () => { 定住 = false; }});
+}
+function 抽档(大) { // 按权重抽稀有度；大箱子去掉普通
+  const 表 = 稀有度.map((r, i) => (大 && i === 0 ? 0 : r.权 * (大 ? (i + 1) ** 2 : 1)));
+  let r = Math.random() * 表.reduce((a, b) => a + b); for (let i = 0; i < 表.length; i++) if ((r -= 表[i]) < 0) return i; return 0;
+}
+
+cv.addEventListener('pointerdown', e => {
+  A();
+  const b = cv.getBoundingClientRect(), x = (e.clientX - b.left) / b.width * W, y = (e.clientY - b.top) / b.height * H;
+  if (卡) { 卡 = null; return; }
+  for (const o of 物) {
+    if (o.捡 || 时 < o.t + 参数.抛出时长) continue;
+    if (Math.abs(x - o.落x) < 30 && Math.abs(y - (地 - 28)) < 40) {
+      if (!o.揭) { o.揭 = true; 音(880, 0.2, 0.1); }
+      else { o.捡 = true; 音(1046, 0.2, 0.1); if (on.card) 卡 = {o, t: 时}; }
+      return;
+    }
+  }
+});
+
+// ---------------- 每帧 ----------------
+let 上帧 = performance.now();
+function 帧(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - 上帧) / 1000)); 上帧 = now; 时 += dt;
+  序列 = 序列.filter(s => (时 >= s.t ? (s.f(), false) : true));
+  暗 += ((定住 ? 0.55 : 0) - 暗) * Math.min(1, dt * 8);
+  if (!定住) for (const m of 怪) { m.x += m.vx * dt; if (m.x < 0 || m.x > W) m.vx *= -1; }
+  for (const c of 币) { c.vy += 900 * dt; c.x += c.vx * dt; c.y += c.vy * dt; if (c.y > 地 - 6) { c.y = 地 - 6; c.vy *= -0.4; c.vx *= 0.7; } }
+  币 = 币.filter(c => 时 - c.t < 1.6);
+  显金 += (金 - 显金) * Math.min(1, dt * 4);
+  // 分开捡：普通～精良（和金币）自动飞向人；紫、橙留在地上
+  for (const o of 物) if (!o.捡 && 时 > o.t + 参数.抛出时长 + 0.8 && (!on.split || o.档 < 3)) { o.飞 = (o.飞 || 0) + dt; if (o.飞 > 0.5) o.捡 = true; }
+  尘 = 尘.filter(p => 时 - p.t < 0.6);
+  画();
+  requestAnimationFrame(帧);
+}
+
+function 物位置(o) {
+  const a = 时 - o.t, T = on.arc ? 参数.抛出时长 : 0;
+  if (a < T) { const p = a / T; return [o.x0 + (o.落x - o.x0) * p, o.y0 + (地 - 14 - o.y0) * p - 4 * 参数.抛出高度 * p * (1 - p)]; }
+  let y = 地 - 14;
+  if (on.bounce) { // 落地弹两下
+    let b = a - T, h = 参数.抛出高度, 段 = 0.28;
+    for (const k of 参数.弹跳) { if (b < 段) { const p = b / 段; y -= 4 * h * k * p * (1 - p); break; } b -= 段; 段 *= 0.7; }
+    if (a - T < 0.02 && !o.尘) { o.尘 = 1; for (let i = 0; i < 8; i++) 尘.push({x: o.落x, vx: (Math.random() - 0.5) * 120, t: 时}); }
+  }
+  let x = o.落x;
+  if (o.飞) { const p = Math.min(1, o.飞 / 0.5); x += (人.x - x) * p * p; y += (地 - 40 - y) * p * p; }
+  return [x, y];
+}
+
+// ---------------- 画：糖果贴纸画风（深紫描边、上浅下深、顶上一道高光） ----------------
+const INK = '#4a1f5c';
+function 圆角(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+const 字体 = '"Arial Rounded MT Bold","Segoe UI Black","Arial Black","PingFang SC","Microsoft YaHei",sans-serif';
+function 描字(文, x, y, 号, 色, 对齐 = 'center') {
+  g.font = `900 ${号}px ${字体}`; g.textAlign = 对齐; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  g.lineWidth = Math.max(4, 号 * 0.24); g.strokeStyle = INK; g.strokeText(文, x, y + 号 * 0.08); g.strokeText(文, x, y);
+  g.fillStyle = 色; g.fillText(文, x, y);
+}
+// 物品图标：白色圆角卡片 + 稀有度颜色的剑（没揭晓时是问号）
+function 图标(o, 色, s) {
+  g.fillStyle = INK; 圆角(-s / 2, -s / 2 + s * 0.08, s, s, s * 0.28); g.fill();
+  g.fillStyle = '#fff'; 圆角(-s / 2, -s / 2, s, s, s * 0.28); g.fill(); g.strokeStyle = INK; g.lineWidth = s * 0.07; g.stroke();
+  const k = s / 64; g.save(); g.scale(k * 0.8, k * 0.8);
+  g.fillStyle = 色; g.strokeStyle = INK; g.lineWidth = 4; g.lineJoin = 'round';
+  if (o.揭) { for (const [x, y, w, h] of [[-5, -28, 10, 36], [-15, 6, 30, 7], [-4, 12, 8, 14]]) { 圆角(x, y, w, h, 3); g.fill(); g.stroke(); } }
+  else 描字('?', 0, 2, 40, 色);
+  g.restore();
+}
+function 画怪(m, i, 定) {
+  const hop = 定 ? 0 : Math.abs(Math.sin(时 * 9 + i)) * 8, x = m.x, y = m.y - hop;
+  g.fillStyle = ['#ff9ccb', '#9be37b', '#b8a3ff', '#7fd3ff'][i % 4]; g.strokeStyle = INK; g.lineWidth = 4;
+  g.beginPath(); g.ellipse(x, y, 24, 20, 0, Math.PI, 0); g.lineTo(x + 24, y + 6); g.quadraticCurveTo(x, y + 14, x - 24, y + 6); g.closePath(); g.fill(); g.stroke();
+  g.fillStyle = INK; for (const s of [-1, 1]) { 圆角(x + s * 8 - 3, y - 8, 6, 10, 3); g.fill(); }
+}
+function 画勇者(x, y, k) {
+  g.save(); g.translate(x, y); g.scale(k, k); g.strokeStyle = INK; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.fillStyle = 'rgba(74,31,92,.18)'; g.beginPath(); g.ellipse(0, 4, 80, 14, 0, 0, 7); g.fill();
+  g.lineWidth = 22; g.beginPath(); g.moveTo(96, -60); g.lineTo(150, -150); g.stroke(); g.lineWidth = 10; g.strokeStyle = '#e8f4ff'; g.stroke(); g.strokeStyle = INK;
+  g.beginPath(); g.arc(0, -80, 78, 0, 7); g.fillStyle = '#ffe0b8'; g.fill(); g.lineWidth = 7; g.stroke();
+  g.beginPath(); g.moveTo(-78, -110); g.quadraticCurveTo(0, -190, 78, -110); g.lineTo(78, -96); g.lineTo(-78, -96); g.closePath(); g.fillStyle = '#5ab8ff'; g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(70, -104); g.lineTo(118, -128 + Math.sin(时 * 9) * 5); g.lineTo(108, -92); g.closePath(); g.fill(); g.lineWidth = 6; g.stroke();
+  g.fillStyle = INK; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * 28, -72, 9, 13, 0, 0, 7); g.fill(); }
+  g.fillStyle = 'rgba(255,143,184,.7)'; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * 50, -48, 12, 7, 0, 0, 7); g.fill(); }
+  g.restore();
+}
+// 糖果宝箱：开 0→1 盖子掀开；漏 = 缝里漏光
+function 画箱(x, y, s, 转, 开, 漏, 金) {
+  const 体 = 金 ? ['#ffe27a', '#ff9f1c'] : ['#e8b98a', '#b07040'];
+  g.save(); g.translate(x, y); g.rotate(转 * Math.PI / 180); g.scale(s, s);
+  const 渐 = g.createLinearGradient(0, -230, 0, 0); 渐.addColorStop(0, 体[0]); 渐.addColorStop(1, 体[1]);
+  g.strokeStyle = INK; g.lineJoin = 'round';
+  g.fillStyle = 'rgba(74,31,92,.2)'; g.beginPath(); g.ellipse(0, 8, 150, 20, 0, 0, 7); g.fill();
+  if (漏 > 0) { g.fillStyle = `rgba(255,251,208,${漏})`; g.beginPath(); g.ellipse(0, -118, 130, 16 + 30 * 漏, 0, 0, 7); g.fill(); }
+  const 盖 = () => {
+    g.save(); g.translate(0, -120 - 开 * 22); g.scale(1, 1 - 开 * 0.8);
+    g.beginPath(); g.moveTo(-130, 0); g.lineTo(-130, -40); g.quadraticCurveTo(0, -110, 130, -40); g.lineTo(130, 0); g.closePath(); g.fillStyle = 渐; g.fill(); g.lineWidth = 9; g.stroke();
+    g.beginPath(); g.moveTo(-100, -30); g.quadraticCurveTo(0, -80, 60, -48); g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = 10; g.lineCap = 'round'; g.stroke(); g.strokeStyle = INK;
+    g.restore();
+  };
+  if (开 > 0.05) 盖();
+  圆角(-130, -120, 260, 120, 22); g.fillStyle = 渐; g.fill(); g.lineWidth = 9; g.stroke();
+  g.fillStyle = 金 ? '#c45bd9' : '#7a4a2a'; g.fillRect(-130, -80, 260, 18); g.lineWidth = 6; g.strokeRect(-130, -80, 260, 18);
+  圆角(-22, -92, 44, 46, 10); g.fillStyle = '#fff7c9'; g.fill(); g.lineWidth = 7; g.stroke();
+  if (开 > 0.05) { g.globalAlpha = Math.min(1, 开 * 2); g.beginPath(); g.ellipse(0, -120, 118, 20, 0, 0, 7); g.fillStyle = '#fff3a0'; g.fill(); g.stroke(); g.globalAlpha = 1; }
+  if (开 <= 0.05) 盖();
+  g.restore();
+}
+// 放射光：一圈转动的光条，中间亮、往外淡
+function 放射(x, y, R, 色, 转) {
+  if (R < 2) return;
+  g.save(); g.translate(x, y); g.rotate(转);
+  const 渐 = g.createRadialGradient(0, 0, 0, 0, 0, R); 渐.addColorStop(0, 色); 渐.addColorStop(0.3, 色); 渐.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = 渐;
+  for (let i = 0; i < 16; i++) { const a = i * Math.PI / 8; g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, R, a, a + Math.PI / 20); g.fill(); }
+  g.restore();
+}
+
+function 画() {
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // 背景：桃色放射光 + 飘的圆点
+  const 底 = g.createRadialGradient(W / 2, H * 0.52, 0, W / 2, H * 0.52, W * 0.7); 底.addColorStop(0, '#fffbe6'); 底.addColorStop(0.45, '#ffe3c2'); 底.addColorStop(1, '#ffb98a');
+  g.fillStyle = 底; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(W / 2, H * 0.6); g.rotate(时 * 5 * Math.PI / 180); g.fillStyle = 'rgba(255,255,255,.28)';
+  for (let i = 0; i < 18; i++) { g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, 900, i * Math.PI / 9, i * Math.PI / 9 + Math.PI / 18); g.fill(); }
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,.4)';
+  for (let x = -70; x < W + 70; x += 70) for (let y = -70; y < H + 70; y += 70) { g.beginPath(); g.arc(x + (时 * 20) % 70, y + (时 * 12) % 70, 7, 0, 7); g.fill(); }
+  // 满屏的怪：停下来时全部定住、变灰
+  if (暗 > 0.01) g.filter = `grayscale(${Math.min(1, 暗 / 0.55) * 0.9}) brightness(${1 - 暗 * 0.4})`;
+  怪.forEach((m, i) => 画怪(m, i, 定住));
+  g.filter = 'none';
+  if (暗 > 0.01) { g.fillStyle = `rgba(74,31,92,${暗 * 0.35})`; g.fillRect(0, 0, W, H); }
+  // 地面：圆角平台
+  const 台 = g.createLinearGradient(0, 地, 0, H); 台.addColorStop(0, '#ffd6a8'); 台.addColorStop(1, '#f2a96b');
+  g.fillStyle = 台; 圆角(30, 地, W - 60, 64, 32); g.fill(); g.strokeStyle = INK; g.lineWidth = 5; g.stroke();
+  画勇者(人.x, 地 + 2, 0.5);
+  // 光柱（先画，在物品后面）：外面一层稀有度颜色，中间一道白芯
+  for (const o of 物) {
+    if (o.捡 || !on.beam || 时 < o.t + (on.arc ? 参数.抛出时长 : 0)) continue;
+    const r = 稀有度[o.档], h = on.scale ? r.柱 : 440; if (!h) continue;
+    const [x] = 物位置(o), 色 = on.color ? r.色 : '#ffffff', w = 26 + 5 * Math.sin(时 * 6);
+    g.fillStyle = 色 + '88'; g.beginPath(); g.ellipse(x, 地 + 2, w * 2.4, 9, 0, 0, 7); g.fill();   // 地上一圈同色的光
+    const gr = g.createLinearGradient(0, 地, 0, 地 - h); gr.addColorStop(0, 色 + 'ee'); gr.addColorStop(1, 色 + '00');
+    g.fillStyle = gr; 圆角(x - w, 地 - h, w * 2, h, w); g.fill();
+    const core = g.createLinearGradient(0, 地, 0, 地 - h * 0.8); core.addColorStop(0, '#ffffffee'); core.addColorStop(1, '#ffffff00');
+    g.fillStyle = core; 圆角(x - w * 0.3, 地 - h * 0.8, w * 0.6, h * 0.8, w * 0.3); g.fill();
+  }
+  // 箱子：抖 → 掀开（带回弹）、背后放射光
+  const 憋着 = 序列.length && !箱.开 && on.tease;
+  if (箱.开) 箱.开时 = 箱.开时 ?? 时; else 箱.开时 = null;
+  const 过 = 箱.开 ? 时 - 箱.开时 : 0, 开 = 箱.开 ? Math.min(1.1, 1 - Math.exp(-过 * 10) * Math.cos(过 * 18)) : 0;
+  if (箱.开 && 序列.length) 放射(箱.x, 地 - 40, 260 * Math.min(1, 过 * 4), 箱.大 ? 'rgba(255,240,150,.7)' : 'rgba(255,240,150,.4)', 时 * 0.7);
+  画箱(箱.x, 地 + 4, 箱.大 ? 0.52 : 0.4, 憋着 ? Math.sin(时 * 40) * 6 : 0, Math.max(0, Math.min(1, 开)), 憋着 ? 0.5 + 0.5 * Math.sin(时 * 20) : 0, 箱.大);
+  // 尘土：白色小云
+  for (const p of 尘) { const a = (时 - p.t) / 0.6; g.fillStyle = `rgba(255,255,255,${0.8 * (1 - a)})`; g.strokeStyle = `rgba(74,31,92,${0.4 * (1 - a)})`; g.lineWidth = 2; g.beginPath(); g.arc(p.x + p.vx * a, 地 - 4 - 20 * a, 4 + 8 * a, 0, 7); g.fill(); g.stroke(); }
+  // 物品：白卡片贴纸
+  for (const o of 物) {
+    if (o.捡 || 时 < o.t) continue;
+    const [x, y] = 物位置(o), r = 稀有度[o.档], 色 = on.color ? r.色 : '#cfcfcf';
+    const 飞着 = 时 < o.t + 参数.抛出时长 && on.arc;
+    g.save(); g.translate(x, y - 14); g.rotate(飞着 ? (时 - o.t) * 12 : -0.12); 图标(o, 色, 40); g.restore();
+    if (on.label && 时 > o.t + 参数.抛出时长) {
+      const 大 = on.scale ? 11 + o.档 * 2 : 19, 文 = o.揭 ? o.名 : '？', ly = 地 - 62 - (物.indexOf(o) % 3) * 24;
+      描字(文, x, ly, 大 + 3, 色);
+    }
+  }
+  // 金币：糖果金币，翻转着喷
+  for (const c of 币) {
+    const 扁 = Math.abs(Math.cos(时 * 14 + c.vx)), 渐 = g.createRadialGradient(c.x - 3, c.y - 3, 0, c.x, c.y, 10);
+    渐.addColorStop(0, '#fff8c0'); 渐.addColorStop(0.55, '#ffc21e'); 渐.addColorStop(1, '#e08a00');
+    g.fillStyle = 渐; g.strokeStyle = INK; g.lineWidth = 2.5; g.beginPath(); g.ellipse(c.x, c.y, 9 * Math.max(0.15, 扁), 9, 0, 0, 7); g.fill(); g.stroke();
+  }
+  // 金币计数：右上角的白胶囊
+  g.fillStyle = '#fff'; 圆角(W - 196, 14, 180, 40, 20); g.fill(); g.strokeStyle = INK; g.lineWidth = 4; g.stroke();
+  g.fillStyle = '#ffc21e'; g.beginPath(); g.arc(W - 172, 34, 11, 0, 7); g.fill(); g.lineWidth = 3; g.stroke();
+  描字(String(Math.round(显金)), W - 30, 35, 24, '#ffc21e', 'right');
+  // 详情卡：白卡片 + 稀有度颜色的顶条
+  if (卡) {
+    const o = 卡.o, r = 稀有度[o.档], s = Math.min(1, (时 - 卡.t) / 0.15);
+    g.save(); g.translate(W / 2, H / 2 - 20); g.scale(s, s);
+    g.fillStyle = INK; 圆角(-180, -122, 360, 256, 22); g.fill();
+    g.fillStyle = '#fffaf0'; 圆角(-180, -130, 360, 256, 22); g.fill(); g.strokeStyle = INK; g.lineWidth = 5; g.stroke();
+    g.save(); 圆角(-180, -130, 360, 256, 22); g.clip(); g.fillStyle = r.色; g.fillRect(-180, -130, 360, 62); g.restore();
+    g.strokeStyle = INK; g.lineWidth = 5; g.beginPath(); g.moveTo(-180, -68); g.lineTo(180, -68); g.stroke();
+    g.save(); g.translate(-138, -99); 图标({揭: true}, r.色, 44); g.restore();
+    描字(o.名, -104, -106, 21, '#fff', 'left');
+    g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillStyle = INK; g.font = `800 13px system-ui,'Microsoft YaHei'`; g.fillText(r.名 + (o.名.includes('弓') ? ' · 弓' : o.名.includes('杖') ? ' · 法杖' : o.名.includes('冠') ? ' · 头冠' : ' · 单手剑'), -104, -82);
+    g.font = `900 18px system-ui,'Microsoft YaHei'`; g.fillText('攻击 ' + (80 + o.档 * 40), -156, -42);
+    const 词 = ['+12% 暴击率', '+8% 攻速', '+40 力量', '击杀回复 3% 生命'].slice(0, o.档);
+    词.forEach((w, i) => { g.fillStyle = '#2f7be0'; g.font = `800 14px system-ui,'Microsoft YaHei'`; g.fillText('◆ ' + w, -156, -14 + i * 22); });
+    if (o.档 === 4) { g.fillStyle = '#e06a00'; g.fillText('传说：每第 5 次攻击释放一道火焰', -156, 80); }
+    g.fillStyle = '#8a6a96'; g.font = '11px system-ui'; g.textAlign = 'right'; g.fillText('点一下关闭', 166, 108);
+    g.restore();
+  }
+}
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

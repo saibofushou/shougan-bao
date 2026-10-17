@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>04 血条、预警与界面 · 小例子</title>
+<style>
+:root{--bg:#0a0405;--panel:#1a0a10;--line:#4a1a28;--txt:#ffe8ee;--dim:#c098a4;--acc:#ff3fa6}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 65% 10%,#3a1018,var(--bg) 60%);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:1px solid var(--line);box-shadow:0 0 18px rgba(255,63,166,.18);border-radius:12px;padding:14px}
+#stage{flex:1 1 440px;min-width:280px;max-width:900px}
+canvas{width:100%;border-radius:12px;display:block;border:1px solid var(--line);box-shadow:0 0 30px rgba(255,63,90,.25)}
+h1{font-size:18px;margin:0 0 4px;font-weight:900;font-style:italic}
+h2{font-size:13px;color:var(--acc);margin:12px 0 2px;font-weight:800;text-shadow:0 0 8px rgba(255,63,166,.6)}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+label{display:flex;gap:8px;align-items:flex-start;padding:1px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button,select{background:#2a0f18;color:var(--txt);border:1px solid #ff3fa6;border-radius:8px;padding:5px 10px;cursor:pointer;font-weight:700}
+button:hover{box-shadow:0 0 10px rgba(255,63,166,.6)}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+input[type=checkbox]{accent-color:#ff3fa6;width:16px;height:16px;margin-top:2px}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>04 血条、预警与界面</h1>
+  <p class="tip">青色的小菱形是你：WASD / 方向键移动，不操作时自动躲（但它只能躲「看得见」的招）。你会自动打 Boss。</p>
+  <div class="row"><button id="allOff">全关</button><button id="allOn">全开</button><button id="reset">重来</button></div>
+  <label>HUD 风格
+    <select id="style">
+      <option value="normal">普通（四角放）</option>
+      <option value="arcade">街机复古（只有分数和命）</option>
+      <option value="minimal">现代极简（受伤才浮出来）</option>
+      <option value="shooter">射击回血（没有血条，屏幕边变红）</option>
+      <option value="none">什么都不放</option>
+    </select>
+  </label>
+  <div id="toggles"></div>
+</div>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 参数 = {
+  Boss血: 300000,
+  每层血: 50000,         // 超过一层就叠层，每层换色，右边标「×N」
+  每格血: 5000,          // 刻度：一小格代表固定血量，数格子就知道还要几下
+  延迟条等待: 0.5,       // 白条停多久再追
+  延迟条追赶: 0.3,       // 追上去用多久
+  层颜色: ['#e8384f', '#ff8a2a', '#ffd23c', '#5adf6a', '#4cb6ff', '#b07bff'],
+  护盾色: '#d8dde6', 回血色: '#4dff8e',
+  低血线: 0.3,           // 低于三成：闪红 + 心跳
+  玩家血: 1000,
+  招式: [ // 越危险预警越长；颜色：红=要躲，黄=可以挡（挨了只掉一点）
+    {名: '横扫', 色: '黄', 预警: 0.3, 半径: 70,  伤害: 60,  位置: '贴身'},
+    {名: '重砸', 色: '红', 预警: 0.8, 半径: 110, 伤害: 260, 位置: '脚下'},
+    {名: '大招', 色: '红', 预警: 1.3, 半径: 230, 伤害: 600, 位置: 'Boss', 危: true},
+  ],
+  统一预警: 0.3,         // 关掉「越危险越长」时，所有招都只给这么长
+  反应时间: 0.3,         // 自动躲的「玩家」看到预警后多久开始动
+  升级弹窗间隔: 18,      // 秒
+};
+// ===========================================================
+
+const 项 = [
+  ['血条五招', [
+    ['delay', '① 延迟条', '红条立刻掉，白条停半秒再追'],
+    ['ticks', '② 刻度', '一小格 = 5000 血'],
+    ['layers', '③ 叠层', '30 万血叠成 6 层，标 ×N'],
+    ['shield', '④ 护盾和回血分色', '护盾灰白、回血绿色先长出来'],
+    ['low', '⑤ 低血警告', '低于三成闪红 + 心跳'],
+  ]],
+  ['Boss 预警五招', [
+    ['windup', '① 前摇', '往后一缩、身上发亮'],
+    ['range', '② 地上画范围', '红圈从中间往外填，填满就打'],
+    ['color', '③ 颜色说话', '红要躲、黄能挡；大招头上冒「危」'],
+    ['cue', '④ 声音预警', '蓄力一声，快打下来再一声'],
+    ['longer', '⑤ 越危险预警越长', '小招 0.3 秒，大招 1.3 秒'],
+  ]],
+  ['界面四层', [
+    ['hud', '① HUD（贴在屏幕上）', '血条、技能冷却扇形、小地图'],
+    ['world', '② 长在世界里', '头顶血条、伤害数字、拾取提示'],
+    ['popup', '③ 弹窗', '升级三选一：暂停、背景变暗'],
+    ['toast', '④ 提示和演出', '大字从中间闪过，一秒就走'],
+  ]],
+];
+const on = {};
+const box = document.getElementById('toggles');
+for (const [组, 列] of 项) {
+  const h = document.createElement('h2'); h.textContent = 组; box.appendChild(h);
+  for (const [k, n, s] of 列) { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" data-k="${k}" checked><span>${n}<small>${s}</small></span>`; box.appendChild(l); }
+}
+const 同步 = () => { for (const i of box.querySelectorAll('input')) on[i.dataset.k] = i.checked; };
+box.addEventListener('change', 同步); 同步();
+document.getElementById('allOff').onclick = () => { box.querySelectorAll('input').forEach(i => i.checked = false); 同步(); };
+document.getElementById('allOn').onclick = () => { box.querySelectorAll('input').forEach(i => i.checked = true); 同步(); };
+document.getElementById('reset').onclick = () => 重来();
+const 风格 = document.getElementById('style');
+
+// ---------------- 声音 ----------------
+let ac = null;
+addEventListener('pointerdown', () => { ac = ac || new AudioContext(); ac.resume(); });
+function 声(f, 长, 量 = 0.1, 型 = 'sine', 到 = null) {
+  if (!ac) return; const t = ac.currentTime, o = ac.createOscillator(), v = ac.createGain();
+  o.type = 型; o.frequency.setValueAtTime(f, t); if (到) o.frequency.exponentialRampToValueAtTime(到, t + 长);
+  v.gain.setValueAtTime(量, t); v.gain.exponentialRampToValueAtTime(0.0001, t + 长); o.connect(v).connect(ac.destination); o.start(t); o.stop(t + 长);
+}
+
+// ---------------- 状态 ----------------
+const W = 820, H = 560;
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * dpr; cv.height = H * dpr;
+const g = cv.getContext('2d');
+let 余波 = null, 连段 = 0, 时, boss, 我, 招, 字, 下一招, 下一盾, 弹窗, 提示, 下一弹窗, 上次操作, 心跳, 冷却, 分, 命, 红边;
+function 重来() {
+  时 = 0; boss = {x: W / 2, y: 200, 血: 参数.Boss血, 白: 参数.Boss血, 上次伤: -9, 盾: 0, 缩: 0, 回: 0, 上次变: -9};
+  我 = {x: W / 2, y: 430, 血: 参数.玩家血, 白: 参数.玩家血, 上次伤: -9, 上次变: -9, 闪: -9};
+  招 = null; 字 = []; 下一招 = 2; 下一盾 = 9; 弹窗 = null; 提示 = {文: '首领来袭', t: 0.2}; 下一弹窗 = 参数.升级弹窗间隔; 上次操作 = -9; 余波 = null; 心跳 = 0; 冷却 = 0; 分 = 0; 命 = 3; 红边 = [];
+}
+重来();
+const 键 = {};
+addEventListener('keydown', e => { 键[e.key.toLowerCase()] = true; 上次操作 = 时; });
+addEventListener('keyup', e => 键[e.key.toLowerCase()] = false);
+
+function 打Boss(伤) {
+  let 余 = 伤;
+  if (boss.盾 > 0) { const 吃 = Math.min(boss.盾, 余); boss.盾 -= 吃; 余 -= 吃; }
+  boss.血 = Math.max(0, boss.血 - 余); boss.上次伤 = 时; boss.上次变 = 时; 分 += 伤 / 10 | 0;
+  if (!on.delay) boss.白 = boss.血;
+  if (on.world) 字.push({x: boss.x + (Math.random() - 0.5) * 60, y: boss.y - 50, 文: String(伤), t: 时, 色: '#fff'});
+  if (boss.血 <= 0 && !boss.死) { boss.死 = true; 提示 = {文: '击败首领', t: 时}; setTimeout(重来, 2500); }
+}
+function 我挨打(伤, 源x, 源y) {
+  我.血 = Math.max(0, 我.血 - 伤); 我.上次伤 = 时; 我.上次变 = 时; 我.闪 = 时;
+  if (!on.delay) 我.白 = 我.血;
+  红边.push({a: Math.atan2(源y - 我.y, 源x - 我.x), t: 时});
+  if (on.world) 字.push({x: 我.x, y: 我.y - 30, 文: '-' + 伤, t: 时, 色: '#c77dff'});
+  声(110, 0.25, 0.25, 'square', 50);
+  if (我.血 <= 0) { 命--; 我.血 = 我.白 = 参数.玩家血; 提示 = {文: '倒下了', t: 时}; }
+}
+
+function 出招() {
+  const k = Math.random() < 0.45 ? 0 : Math.random() < 0.6 ? 1 : 2, z = 参数.招式[k];
+  const 预 = on.longer ? z.预警 : 参数.统一预警;
+  let x = boss.x, y = boss.y;
+  if (z.位置 === '脚下') { x = 我.x; y = 我.y; }
+  if (z.位置 === '贴身') { const a = Math.atan2(我.y - boss.y, 我.x - boss.x); x = boss.x + Math.cos(a) * 90; y = boss.y + Math.sin(a) * 90; }
+  // 前摇和范围都没有：说打就打
+  const 看得见 = on.windup || on.range;
+  招 = {...z, x, y, t: 时, 预: 看得见 ? 预 : 0.02, 响: false};
+  if (on.cue && 看得见) 声(220, 预, 0.07, 'sawtooth', 440);
+  if (z.危 && on.toast) 提示 = {文: '首领狂暴', t: 时};
+}
+
+// ---------------- 每帧 ----------------
+let 上帧 = performance.now();
+function 帧(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - 上帧) / 1000)); 上帧 = now;
+  if (弹窗) { // 弹窗：游戏暂停，两秒后自动选
+    if (now / 1000 - 弹窗.开 > 2) 弹窗 = null;
+    画(); requestAnimationFrame(帧); return;
+  }
+  时 += dt;
+  if (on.popup && 时 > 下一弹窗) { 弹窗 = {开: now / 1000}; 下一弹窗 = 时 + 参数.升级弹窗间隔; 声(660, 0.3, 0.1); }
+  // 移动：键盘，或自动躲
+  let mx = (键.d || 键.arrowright ? 1 : 0) - (键.a || 键.arrowleft ? 1 : 0), my = (键.s || 键.arrowdown ? 1 : 0) - (键.w || 键.arrowup ? 1 : 0);
+  if (时 - 上次操作 > 2) {
+    let tx = boss.x + Math.cos(时 * 0.7) * 150, ty = boss.y + 170;
+    if (招 && 时 - 招.t > 参数.反应时间) {
+      if (on.range) { const d = Math.hypot(我.x - 招.x, 我.y - 招.y); if (d < 招.半径 + 30) { const a = Math.atan2(我.y - 招.y, 我.x - 招.x); tx = 招.x + Math.cos(a) * (招.半径 + 60); ty = 招.y + Math.sin(a) * (招.半径 + 60); } }
+      else if (on.windup) { tx = 我.x + (我.x - boss.x) * 0.6; ty = 我.y + 60; } // 只看到前摇：大概往后退
+    }
+    mx = tx - 我.x; my = ty - 我.y; const l = Math.hypot(mx, my); if (l < 4) mx = my = 0; else { mx /= l; my /= l; }
+  }
+  我.x = Math.max(20, Math.min(W - 20, 我.x + mx * 260 * dt)); 我.y = Math.max(300, Math.min(H - 70, 我.y + my * 260 * dt));
+  // 自动打 Boss
+  冷却 -= dt; if (冷却 <= 0) { 连段 = (连段 + 1) % 4; 冷却 = 连段 === 0 ? 1.1 : 0.25; 打Boss(Math.random() < 0.12 ? 12000 + (Math.random() * 3000 | 0) : 2000 + (Math.random() * 2000 | 0)); }
+  // 延迟条：受伤后停一会儿再追
+  for (const p of [boss, 我]) if (on.delay && 时 - p.上次伤 > 参数.延迟条等待) p.白 += (p.血 - p.白) * Math.min(1, dt / 参数.延迟条追赶 * 3);
+  if (boss.白 < boss.血) boss.白 = boss.血;
+  // 护盾 / 回血
+  if (时 > 下一盾) { 下一盾 = 时 + 9; if (Math.random() < 0.5) boss.盾 = 15000; else boss.回 = 12000; boss.上次变 = 时; }
+  if (boss.回 > 0) { const r = Math.min(boss.回, 20000 * dt); boss.回 -= r; boss.血 = Math.min(参数.Boss血, boss.血 + r); }
+  // Boss 招式
+  if (!招 && 时 > 下一招) 出招();
+  if (招) {
+    const a = 时 - 招.t;
+    boss.缩 = on.windup ? Math.max(0, Math.min(1, a / 招.预)) : 0;
+    if (on.cue && !招.响 && a > 招.预 - 0.15 && 招.预 > 0.2) { 招.响 = true; 声(880, 0.12, 0.1, 'square'); }
+    if (a >= 招.预) {
+      if (Math.hypot(我.x - 招.x, 我.y - 招.y) < 招.半径) 我挨打(招.色 === '黄' ? 招.伤害 / 2 | 0 : 招.伤害, 招.x, 招.y);
+      声(70, 0.4, 0.3, 'sine', 35); 招.落 = 时; boss.缩 = 0;
+      下一招 = 时 + 1.2 + Math.random(); const 刚 = 招; 招 = null; 余波 = 刚;
+    }
+  }
+  // 低血心跳
+  if (on.low && 我.血 / 参数.玩家血 < 参数.低血线) { 心跳 -= dt; if (心跳 <= 0) { 心跳 = 0.8; 声(60, 0.12, 0.35); setTimeout(() => 声(55, 0.12, 0.25), 160); } }
+  else if (我.血 < 参数.玩家血) 我.血 = Math.min(参数.玩家血, 我.血 + 15 * dt);
+  字 = 字.filter(z => 时 - z.t < 0.8);
+  红边 = 红边.filter(r => 时 - r.t < 1);
+  画(); requestAnimationFrame(帧);
+}
+
+
+// ---------------- 画：霓虹风（深色底、发光的线） ----------------
+const 窄 = '"Bahnschrift","Arial Narrow","Roboto Condensed",system-ui,sans-serif';
+const 发光 = (色, 糊) => { g.shadowColor = 色; g.shadowBlur = 糊; };
+const 不发光 = () => { g.shadowBlur = 0; };
+function 圆角(x, y, w, h, r) { r = Math.min(r, h / 2, w / 2); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+function 亮字(文, x, y, 号, 色, 对齐 = 'center', 斜 = true, 粗 = 800) {
+  g.font = `${斜 ? 'italic ' : ''}${粗} ${号}px ${窄}`; g.textAlign = 对齐; g.textBaseline = 'alphabetic';
+  g.lineJoin = 'round'; g.lineWidth = Math.max(3, 号 * 0.16); g.strokeStyle = 'rgba(10,2,6,.9)'; g.strokeText(文, x, y);
+  发光(色, 号 * 0.5); g.fillStyle = 色; g.fillText(文, x, y); 不发光();
+}
+const 千分 = v => Math.round(v).toLocaleString('en-US');
+
+function 画血条(x, y, w, h, 血, 白, 满, 盾 = 0, 回 = 0, 层 = false) {
+  const 每层 = 层 && on.layers ? 参数.每层血 : 满;
+  const 剩层 = Math.ceil(血 / 每层), 本层 = 血 - (剩层 - 1) * 每层, 下色 = 参数.层颜色[(剩层 - 2 + 60) % 参数.层颜色.length], 本色 = 层 && on.layers ? 参数.层颜色[(剩层 - 1) % 参数.层颜色.length] : '#ff3b4f';
+  // 底框：深色圆角槽 + 一圈细亮边
+  g.fillStyle = '#12070b'; 圆角(x - 3, y - 3, w + 6, h + 6, (h + 6) / 2); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = 1.5; g.stroke();
+  g.save(); 圆角(x, y, w, h, h / 2); g.clip();
+  g.fillStyle = 剩层 > 1 ? 下色 : '#2a1218'; g.fillRect(x, y, w, h);
+  // 白色延迟条（只在同一层里画）
+  const 白本 = Math.min(每层, 白 - (剩层 - 1) * 每层);
+  if (on.delay && 白本 > 本层) { g.fillStyle = '#fff1e6'; g.fillRect(x, y, w * 白本 / 每层, h); }
+  const 渐 = g.createLinearGradient(0, y, 0, y + h); 渐.addColorStop(0, '#ffffff'); 渐.addColorStop(0.25, 本色); 渐.addColorStop(1, 本色);
+  g.fillStyle = 渐; g.globalAlpha = 1; g.fillRect(x, y, w * 本层 / 每层, h);
+  g.fillStyle = 本色; g.globalAlpha = 0.85; g.fillRect(x, y + h * 0.3, w * 本层 / 每层, h * 0.7); g.globalAlpha = 1;
+  if (on.shield && 回 > 0) { g.fillStyle = 参数.回血色; g.fillRect(x + w * 本层 / 每层, y, Math.min(w * 回 / 每层, w * (1 - 本层 / 每层)), h); }
+  if (盾 > 0) { g.fillStyle = on.shield ? 参数.护盾色 : 本色; g.fillRect(x + w * 本层 / 每层, y, Math.min(w * 盾 / 每层, w - w * 本层 / 每层 + 0.01) || 0, h); if (on.shield && 本层 + 盾 > 每层) g.fillRect(x + w - 6, y, 6, h); }
+  if (on.ticks && 层) { g.fillStyle = 'rgba(0,0,0,.45)'; for (let v = 参数.每格血; v < 每层; v += 参数.每格血) g.fillRect(x + w * v / 每层, y + h * 0.45, 1.5, h * 0.55); }
+  g.restore();
+  // 掉血那一头亮一下
+  if (时 - (层 ? boss.上次伤 : 我.上次伤) < 0.12) { 发光('#fff', 14); g.fillStyle = '#fff'; g.fillRect(x + w * 本层 / 每层 - 2, y - 2, 4, h + 4); 不发光(); }
+  if (层 && on.layers && 剩层 > 1) 亮字('×' + 剩层, x + w + 10, y + h + 3, h * 1.6, '#ffd23c', 'left');
+}
+// Boss：粉色霓虹六边形 + 里面一个转着的方块 + 黄色的芯
+function 画Boss(缩, 色) {
+  const r = 52, 转 = 时 * 0.4;
+  g.save(); g.translate(boss.x, boss.y - 缩 * 14); g.scale(1 + 缩 * 0.12, 1 - 缩 * 0.1);
+  const 光 = g.createRadialGradient(0, 0, 0, 0, 0, r * 2.4); 光.addColorStop(0, 色 + '55'); 光.addColorStop(1, 色 + '00');
+  g.fillStyle = 光; g.beginPath(); g.arc(0, 0, r * 2.4, 0, 7); g.fill();
+  const 六 = () => { g.beginPath(); for (let i = 0; i < 6; i++) { const a = 转 + i * Math.PI / 3 + Math.PI / 6; g.lineTo(Math.cos(a) * r, Math.sin(a) * r); } g.closePath(); };
+  六(); const 里 = g.createRadialGradient(0, 0, 0, 0, 0, r); 里.addColorStop(0, '#5a1240'); 里.addColorStop(1, '#2a0820'); g.fillStyle = 里; g.fill();
+  发光(色, 22 + 18 * 缩); g.strokeStyle = 色; g.lineWidth = 6; 六(); g.stroke();
+  g.strokeStyle = '#ffd0ec'; g.lineWidth = 2; 六(); g.stroke();
+  g.save(); g.rotate(-转 * 2.2); g.strokeStyle = '#ffd0ec'; g.lineWidth = 4; g.strokeRect(-r * 0.36, -r * 0.36, r * 0.72, r * 0.72); g.restore();
+  发光('#ffd23c', 20); g.fillStyle = '#ffe680'; g.beginPath(); g.arc(0, 0, r * 0.15, 0, 7); g.fill(); 不发光();
+  if (缩 > 0) { g.globalAlpha = 缩 * 0.35; g.fillStyle = '#fff'; 六(); g.fill(); g.globalAlpha = 1; }
+  g.restore();
+}
+
+function 画() {
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const 底 = g.createRadialGradient(W / 2, H * 0.42, 0, W / 2, H * 0.42, W * 0.75); 底.addColorStop(0, '#3a1018'); 底.addColorStop(0.55, '#170609'); 底.addColorStop(1, '#070304');
+  g.fillStyle = 底; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgba(255,90,120,.08)'; for (let x = 20; x < W; x += 40) for (let y = 20; y < H; y += 40) g.fillRect(x - 1, y - 1, 2, 2);
+  // 预警范围：从中间往外填，填满就打
+  if (招 && on.range) {
+    const p = Math.max(0, Math.min(1, (时 - 招.t) / 招.预)), 色 = on.color ? (招.色 === '红' ? '255,60,80' : '255,210,60') : '235,235,255';
+    g.fillStyle = `rgba(${色},0.12)`; g.beginPath(); g.arc(招.x, 招.y, 招.半径, 0, 7); g.fill();
+    发光(`rgb(${色})`, 16); g.strokeStyle = `rgba(${色},0.95)`; g.lineWidth = 3; g.setLineDash([10, 6]); g.lineDashOffset = -时 * 40; g.beginPath(); g.arc(招.x, 招.y, 招.半径, 0, 7); g.stroke(); g.setLineDash([]);
+    g.fillStyle = `rgba(${色},0.32)`; g.beginPath(); g.arc(招.x, 招.y, 招.半径 * p, 0, 7); g.fill();
+    g.strokeStyle = `rgba(${色},0.9)`; g.lineWidth = 2; g.beginPath(); g.arc(招.x, 招.y, Math.max(1, 招.半径 * p), 0, 7); g.stroke(); 不发光();
+  }
+  if (余波 && 时 - 余波.落 < 0.25) { const a = (时 - 余波.落) / 0.25; g.strokeStyle = `rgba(255,255,255,${1 - a})`; g.lineWidth = 8 * (1 - a); 发光('#fff', 20); g.beginPath(); g.arc(余波.x, 余波.y, 余波.半径 * (1 + a * 0.2), 0, 7); g.stroke(); 不发光(); }
+  // Boss：前摇时往后一缩、发光变成招式的颜色
+  const 招色 = 招 && on.color ? (招.色 === '红' ? '#ff3c50' : '#ffd23c') : '#ffffff';
+  画Boss(boss.缩, boss.缩 > 0 ? 招色 : '#ff3fa6');
+  if (招 && 招.危 && on.color) 亮字('危', boss.x, boss.y - 92 + Math.sin(时 * 20) * 2, 48, '#ff2a40', 'center', false, 900);
+  // 我：青色发光的小菱形
+  const 闪 = 时 - 我.闪 < 0.12;
+  g.save(); g.translate(我.x, 我.y); g.rotate(Math.PI / 4); 发光('#3fe0ff', 18); g.fillStyle = 闪 ? '#fff' : '#0b2a33'; g.fillRect(-11, -11, 22, 22);
+  g.strokeStyle = '#3fe0ff'; g.lineWidth = 3.5; g.strokeRect(-11, -11, 22, 22); 不发光(); g.restore();
+  // 第二层：长在世界里的
+  if (on.world) {
+    画血条(boss.x - 46, boss.y - 76, 92, 7, boss.血, boss.白, 参数.Boss血);
+    for (const z of 字) {
+      const a = (时 - z.t) / 0.8, 值 = parseInt(z.文.replace('-', '')), 暴 = z.色 === '#fff' && 值 >= 10000, 挨 = z.文[0] === '-';
+      g.globalAlpha = Math.min(1, (1 - a) * 2.5);
+      const 号 = 暴 ? 34 : 挨 ? 24 : 20, 弹 = a < 0.08 ? 1.5 - a / 0.08 * 0.5 : 1;
+      g.save(); g.translate(z.x, z.y - a * 30); g.rotate(-0.06); g.scale(弹, 弹);
+      if (暴) 亮字('暴击', -号 * 0.9, -号 * 0.85, 12, '#ffd23c', 'center', true);
+      亮字(暴 ? 千分(值) + '!' : 挨 ? z.文 : 千分(值), 0, 0, 号, 暴 ? '#ff5a3c' : 挨 ? '#c77dff' : '#ffb0b8');
+      g.restore();
+    }
+    g.globalAlpha = 1;
+    const 浮 = Math.sin(时 * 3) * 3;
+    发光('#ffd23c', 16); g.fillStyle = '#ffe680'; g.beginPath(); g.arc(120, 470 + 浮, 7, 0, 7); g.fill(); 不发光();
+    g.fillStyle = '#ffd23c'; g.font = `700 12px ${窄}`; g.textAlign = 'center'; g.fillText('[E] 拾取', 120, 450 + 浮);
+  }
+  // 第一层：HUD
+  const s = 风格.value, 刚变 = 时 - 我.上次变 < 2;
+  if (on.hud && s === 'normal' || on.hud && s === 'minimal' && 刚变) {
+    g.globalAlpha = s === 'minimal' ? Math.max(0, 1 - Math.max(0, 时 - 我.上次变 - 1.5) / 0.5) : 1;
+    g.fillStyle = '#fff'; g.font = `800 15px ${窄}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillText('焚天魔将', W / 2 - 250, 28);
+    g.font = `italic 700 13px ${窄}`; g.textAlign = 'right'; g.fillStyle = '#ffd0d6'; g.fillText(千分(boss.血) + ' / ' + 千分(参数.Boss血), W / 2 + 250, 28);
+    画血条(W / 2 - 250, 36, 500, 14, boss.血, boss.白, 参数.Boss血, boss.盾, boss.回, true);
+    if (s === 'normal') {
+      g.textAlign = 'left'; g.fillStyle = '#fff'; g.font = `700 13px ${窄}`; g.fillText(Math.round(我.血) + ' / ' + 参数.玩家血, 24, H - 50);
+      画血条(24, H - 40, 220, 14, 我.血, 我.白, 参数.玩家血);
+      // 技能冷却：扇形转一圈，转满就亮
+      for (let i = 0; i < 3; i++) {
+        const cx = W - 150 + i * 50, cy = H - 34, p = ((时 + i * 1.3) % (3 + i)) / (3 + i), 满 = p > 0.98;
+        g.fillStyle = '#12070b'; g.beginPath(); g.arc(cx, cy, 18, 0, 7); g.fill();
+        g.fillStyle = 满 ? '#ffd23c' : 'rgba(255,90,120,.45)'; g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, 18, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); g.fill();
+        if (满) 发光('#ffd23c', 16); g.strokeStyle = 满 ? '#ffd23c' : 'rgba(255,255,255,.4)'; g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, 18, 0, 7); g.stroke(); 不发光();
+      }
+      g.fillStyle = 'rgba(10,3,6,.75)'; 圆角(W - 110, 62, 90, 90, 10); g.fill(); g.strokeStyle = 'rgba(255,90,120,.6)'; g.lineWidth = 1.5; g.stroke();
+      发光('#ff3fa6', 8); g.fillStyle = '#ff3fa6'; g.fillRect(W - 110 + boss.x / W * 90 - 3, 62 + boss.y / H * 90 - 3, 6, 6);
+      发光('#3fe0ff', 8); g.fillStyle = '#3fe0ff'; g.fillRect(W - 110 + 我.x / W * 90 - 2, 62 + 我.y / H * 90 - 2, 4, 4); 不发光();
+    }
+    g.globalAlpha = 1;
+  }
+  if (on.hud && s === 'arcade') { 亮字('SCORE ' + String(分).padStart(7, '0'), 20, 34, 22, '#ffffff', 'left', false); 亮字('♥'.repeat(命), W - 20, 34, 24, '#ff3b4f', 'right', false); }
+  if (s === 'shooter' || (on.low && s !== 'none' && 我.血 / 参数.玩家血 < 参数.低血线)) {
+    // 屏幕边缘变红；射击风格里红边还指着伤害从哪来
+    const 低 = 1 - 我.血 / 参数.玩家血, 闪 = on.low && 我.血 / 参数.玩家血 < 参数.低血线 ? 0.5 + 0.5 * Math.sin(时 * 8) : 1;
+    const v = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.8); v.addColorStop(0, 'rgba(255,0,0,0)'); v.addColorStop(1, `rgba(255,0,0,${(s === 'shooter' ? 低 * 0.8 : 0.45) * 闪})`);
+    g.fillStyle = v; g.fillRect(0, 0, W, H);
+    if (s === 'shooter') for (const r of 红边) { const a = 1 - (时 - r.t); g.fillStyle = `rgba(255,40,40,${a})`; 发光('#ff2020', 20); g.save(); g.translate(W / 2 + Math.cos(r.a) * 230, H / 2 + Math.sin(r.a) * 230); g.rotate(r.a); 圆角(-6, -40, 12, 80, 6); g.fill(); g.restore(); 不发光(); }
+  }
+  // 第四层：提示和演出
+  if (on.toast && 提示 && 时 - 提示.t < 1) {
+    const a = (时 - 提示.t), x = W / 2 + (a < 0.2 ? (1 - a / 0.2) * -300 : a > 0.8 ? (a - 0.8) / 0.2 * 300 : 0);
+    const 带 = g.createLinearGradient(0, 0, W, 0); 带.addColorStop(0, 'rgba(0,0,0,0)'); 带.addColorStop(0.2, 'rgba(10,2,6,.85)'); 带.addColorStop(0.8, 'rgba(10,2,6,.85)'); 带.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = 带; g.fillRect(0, H / 2 - 38, W, 64);
+    发光('#ffd23c', 10); g.fillStyle = '#ffd23c'; g.fillRect(0, H / 2 - 38, W, 2); g.fillRect(0, H / 2 + 24, W, 2); 不发光();
+    亮字(提示.文, x, H / 2 + 12, 40, '#ffd23c', 'center', true, 900);
+  }
+  // 第三层：弹窗
+  if (弹窗) {
+    g.fillStyle = 'rgba(5,1,3,.78)'; g.fillRect(0, 0, W, H);
+    亮字('升级了！三选一', W / 2, 150, 30, '#ffffff', 'center', true, 900);
+    [['#e8e8e8', '攻击 +5%'], ['#4cb6ff', '冷却 -10%'], ['#ffc84a', '每次暴击回血']].forEach(([c, t], i) => {
+      const x = W / 2 - 230 + i * 160;
+      g.fillStyle = '#1a0a10'; 圆角(x, 190, 140, 180, 14); g.fill();
+      发光(c, i === 2 ? 26 : 10); g.strokeStyle = c; g.lineWidth = i === 2 ? 4 : 2; g.stroke(); 不发光();
+      亮字(t, x + 70, 290, 16, c, 'center', false, 700);
+    });
+    g.fillStyle = '#a08890'; g.font = '12px system-ui'; g.textAlign = 'center'; g.fillText('（两秒后自动选；越稀有越亮）', W / 2, 400);
+  }
+}
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

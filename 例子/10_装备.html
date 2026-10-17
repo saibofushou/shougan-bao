@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>10 装备 · 小例子</title>
+<style>
+:root{--bg:#0a0705;--panel:rgba(22,15,9,.88);--line:#5a4020;--txt:#f3e6cf;--dim:#b09a7a;--acc:#ffc84a;--gold:#e8b44a}
+*{box-sizing:border-box}
+/* 深棕黑底 + 中间一团暖金光 + 很淡的方格 */
+body{margin:0;color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;padding:12px;min-height:100vh;
+  background:linear-gradient(rgba(255,200,120,.035) 1px,transparent 1px) 0 0/32px 32px,linear-gradient(90deg,rgba(255,200,120,.035) 1px,transparent 1px) 0 0/32px 32px,radial-gradient(ellipse at 50% 35%,#3a2410,#140c06 55%,var(--bg))}
+body>*{max-width:1040px;margin-left:auto;margin-right:auto}
+h1{font-size:20px;margin:4px auto;font-weight:900;font-style:italic;color:#ffe2a0;text-shadow:0 0 12px rgba(255,180,60,.45)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px auto}.tabs button{flex:1;min-width:110px}
+button,select{background:linear-gradient(#2a1d10,#170f08);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:14px;font-weight:700}
+button:hover,button.on{border-color:var(--gold);box-shadow:0 0 12px rgba(255,190,80,.45)}
+button.on{background:linear-gradient(#5a3c14,#2a1a08);color:#ffe2a0}
+.page{display:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:inset 0 0 40px rgba(255,170,60,.06),0 0 30px rgba(0,0,0,.6)}.page.on{display:block}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
+.dim{color:var(--dim);font-size:12px}
+.wrap{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+input[type=checkbox]{accent-color:#e8b44a}
+/* 装备卡：金色细框 + 稀有度颜色的外发光 */
+.card{width:300px;max-width:100%;background:linear-gradient(#22170c,#0f0a06);border:2px solid var(--r,#888);outline:1px solid rgba(232,180,74,.35);outline-offset:3px;border-radius:8px;padding:10px 12px;box-shadow:0 0 22px -4px var(--r,#888),inset 0 0 24px rgba(0,0,0,.6)}
+.card .nm{font-size:18px;font-weight:900;font-style:italic;color:var(--r);text-shadow:0 0 10px var(--r)}
+.card .sub{font-size:12px;color:var(--dim)}
+.card .base{font-size:24px;font-weight:800;font-style:italic;margin:4px 0;font-family:"Bahnschrift","Arial Narrow",system-ui,sans-serif;color:#ffe2a0;text-shadow:0 0 10px rgba(255,190,80,.5)}
+.card .ln{font-size:13px;padding:1px 0}
+.card hr{border:0;border-top:1px solid #4a3418;margin:6px 0}
+.bar{height:6px;background:#2a1d10;border-radius:3px;position:relative;margin:2px 0 6px}.bar i{position:absolute;top:-3px;width:3px;height:12px;background:#ffe2a0;box-shadow:0 0 6px #ffc84a}
+.mini{width:150px;font-size:11px;padding:6px 8px}.mini .nm{font-size:13px}.mini .base{font-size:15px}
+.step{opacity:.25;transition:opacity .3s}.step.on{opacity:1}
+#steps div{padding:5px 9px;border-left:3px solid #4a3418;margin:3px 0;border-radius:0 6px 6px 0}
+#steps div.on{border-color:var(--acc);background:linear-gradient(90deg,rgba(255,190,80,.16),rgba(255,190,80,0))}
+.full .ln{line-height:1.35}
+.grp{border-radius:6px;padding:3px 6px;margin:4px 0}
+.out{background:rgba(10,7,4,.7);border:1px solid #3a2810;border-radius:8px;padding:8px 10px;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>10 装备：随机生成、三条路、分层的卡</h1>
+<div class="tabs"><button data-t="gen" class="on">① 一件装备怎么随机出来</button><button data-t="paths">② 三条路：读 / 买 / 换玩法</button><button data-t="era">③ 装备卡 35 年 + 满屏卡怎么分层</button></div>
+
+<div class="page on" id="p-gen">
+  <div class="row"><button id="gOne">生成一件（一步一步）</button><button id="gFast">连抽 12 件</button><button id="gSword">只抽长剑，直到出传说</button></div>
+  <div class="wrap">
+    <div id="steps" style="flex:1 1 260px"></div>
+    <div id="gCard"></div>
+  </div>
+  <div id="gFastBox" class="wrap" style="margin-top:10px"></div>
+  <div class="out" id="gOdds"></div>
+</div>
+
+<div class="page" id="p-paths">
+  <div class="row"><button id="pNew">换一件</button><span class="dim">同一件掉落，三种游戏三种写法</span></div>
+  <div class="wrap" id="pBox"></div>
+</div>
+
+<div class="page" id="p-era">
+  <div class="row">年代 <select id="eYear"></select> <label><input type="checkbox" id="eLayer" checked> 满屏卡分层（颜色 / 分组 / 总评）</label></div>
+  <div class="wrap"><div id="eCard"></div><div class="out" id="eNote" style="flex:1 1 260px"></div></div>
+</div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 部位表 = ['长剑', '头盔', '戒指', '铠甲', '靴子'];
+const 稀有度 = [   // 名字, 权重, 颜色, 附加条数
+  ['普通', 700, '#d8d8d8', 0], ['精良', 220, '#4dff6a', 1], ['稀有', 65, '#4aa8ff', 2], ['史诗', 14, '#c05aff', 3], ['传说', 1, '#ff9a1a', 4]];
+const 基础 = {   // 部位: [属性, 每个稀有度的 [最低, 最高]]
+  长剑: ['攻击', [[20, 30], [35, 50], [55, 75], [80, 120], [130, 170]]], 头盔: ['护甲', [[8, 12], [14, 20], [24, 32], [36, 50], [60, 80]]],
+  戒指: ['全属性', [[1, 2], [2, 4], [4, 7], [7, 11], [12, 18]]], 铠甲: ['护甲', [[15, 25], [28, 40], [45, 60], [70, 95], [110, 140]]],
+  靴子: ['移速', [[2, 4], [4, 7], [7, 10], [10, 14], [15, 20]]]};
+const 词缀表 = [   // 名字, 单位, 最低, 最高, 起名用的前缀
+  ['暴击率', '%', 2, 12, '致命的'], ['吸血', '%', 1, 8, '嗜血的'], ['攻速', '%', 3, 15, '疾风的'], ['火焰伤害', '', 10, 60, '燃烧的'],
+  ['冰冻几率', '%', 2, 10, '寒霜的'], ['移动速度', '%', 3, 12, '轻盈的'], ['生命', '', 20, 150, '坚韧的'], ['护甲', '', 10, 80, '坚固的'],
+  ['穿透', '%', 2, 10, '锋锐的'], ['闪避', '%', 2, 9, '灵巧的'], ['经验加成', '%', 5, 20, '睿智的'], ['金币加成', '%', 5, 30, '贪婪的']];
+const 底名 = {长剑: ['长剑', '暗影长剑', '骑士剑'], 头盔: ['铁盔', '角盔'], 戒指: ['指环', '符文戒指'], 铠甲: ['链甲', '板甲'], 靴子: ['皮靴', '战靴']};
+// =========================================================
+
+const $ = id => document.getElementById(id), 随 = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t));
+});
+function 按权重(表) { let r = Math.random() * 表.reduce((s, x) => s + x[1], 0); for (let i = 0; i < 表.length; i++) { r -= 表[i][1]; if (r < 0) return i; } return 表.length - 1; }
+function 抽不重复(n, k) { const a = [...Array(n).keys()]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, k); }
+
+// 五步生成一件
+function 生成(指定部位) {
+  const 部位 = 指定部位 || 部位表[Math.floor(Math.random() * 部位表.length)];   // ① 部位
+  const 稀 = 按权重(稀有度);                                                     // ② 稀有度（按权重）
+  const [属性, 范围] = 基础[部位], [lo, hi] = 范围[稀], 值 = 随(lo, hi);          // ③ 基础属性（在范围里随机）
+  const 附 = 抽不重复(词缀表.length, 稀有度[稀][3]).map(i => { const a = 词缀表[i]; return {i, 名: a[0], 单位: a[1], lo: a[2], hi: a[3], 值: 随(a[2], a[3])}; });   // ④ 附加（不重复）
+  const 名 = (附.length ? 词缀表[附[0].i][4] : '') + 底名[部位][稀 % 底名[部位].length];   // ⑤ 起名字
+  return {部位, 稀, 属性, lo, hi, 值, 附, 名};
+}
+const 名次 = (v, lo, hi) => hi > lo ? (v - lo) / (hi - lo) : 1;
+function 卡(e, 小) {
+  const [稀名, , 色] = 稀有度[e.稀];
+  return `<div class="card ${小 ? 'mini' : ''}" style="--r:${色}"><div class="nm">${e.名}</div><div class="sub">${稀名} · ${e.部位}</div>
+    <div class="base">${e.属性} ${e.值}</div>${小 ? '' : `<div class="sub">范围 ${e.lo}～${e.hi}，这一件排在前 ${Math.max(1, Math.round((1 - 名次(e.值, e.lo, e.hi)) * 100))}%</div><div class="bar"><i style="left:${名次(e.值, e.lo, e.hi) * 100}%"></i></div>`}
+    ${e.附.map(a => `<div class="ln" style="color:#7fb8ff">+${a.值}${a.单位} ${a.名}${小 ? '' : ` <span class="dim">(${a.lo}～${a.hi})</span>`}</div>`).join('')}</div>`;
+}
+const 步名 = ['① 抽部位', '② 抽稀有度（权重 700 / 220 / 65 / 14 / 1，加起来 1000）', '③ 基础属性：在这个稀有度的范围里随机', '④ 附加属性：越稀有条数越多，从 12 条里不重复地抽，每条再随机数值', '⑤ 按抽中的属性起名字'];
+let 计时 = [];
+function 一步步(e) {
+  计时.forEach(clearTimeout); 计时 = [];
+  const 字 = [`→ ${e.部位}`, `→ ${稀有度[e.稀][0]}`, `→ ${e.属性} ${e.值}（${e.lo}～${e.hi}）`, `→ ${e.附.length ? e.附.map(a => a.名).join('、') : '普通没有附加'}`, `→ 「${e.名}」`];
+  $('steps').innerHTML = 步名.map((s, i) => `<div id="st${i}">${s}<br><b class="dim" id="sv${i}"></b></div>`).join('');
+  $('gCard').innerHTML = '';
+  步名.forEach((_, i) => 计时.push(setTimeout(() => { $('st' + i).classList.add('on'); $('sv' + i).textContent = 字[i]; if (i === 4) $('gCard').innerHTML = 卡(e); }, i * 500)));
+}
+$('gOne').onclick = () => 一步步(生成());
+$('gFast').onclick = () => { $('gFastBox').innerHTML = Array.from({length: 12}, () => 卡(生成(), true)).join(''); };
+$('gSword').onclick = () => { let n = 0, e; do { e = 生成('长剑'); n++; } while (e.稀 < 4); 一步步(e); $('gOdds').innerHTML = `这次抽了 <b>${n}</b> 把长剑才出传说（平均 1000 把）。<br>` + 完美(); };
+function 完美() {
+  // 完美 = 传说 × 指定部位 × 攻击前一成 × 想要的两条都在 4 条里 × 两条数值都偏高
+  const C = (n, k) => { let r = 1; for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1); return r; };
+  const 两条 = C(10, 2) / C(12, 4), p = 1 / 1000 * 1 / 5 * 0.1 * 两条 * 0.25;
+  return `一把「完美的剑」有多难：传说 1/1000 × 长剑 1/5 × 攻击前一成 1/10 × 想要的两条刚好在 4 条里 ${C(10, 2)}/${C(12, 4)} × 两条数值都偏高 1/4
+    = 约 <b>${Math.round(1 / p).toLocaleString()}</b> 分之一。每天开 500 个箱子，要开 <b>${(1 / p / 500 / 365).toFixed(1)}</b> 年。`;
+}
+$('gOdds').innerHTML = 完美(); 一步步(生成('长剑'));
+
+// ② 三条路
+function 三条路() {
+  let e; do e = 生成('长剑'); while (e.稀 < 2);   // 至少稀有，才有两条词缀可读
+  const 身上 = {攻击: 95, 暴击率: 6, 吸血: 3};
+  const 比 = (名, v) => 身上[名] === undefined ? '' : v > 身上[名] ? ` <b style="color:#5be08a">▲${v - 身上[名]}</b>` : v < 身上[名] ? ` <b style="color:#ff6b7a">▼${身上[名] - v}</b>` : '';
+  const 读 = `<div class="card" style="--r:${稀有度[e.稀][2]}"><div class="sub">第一条路：让你读</div><div class="nm">${e.名}</div>
+    <div class="base">攻击 ${e.值}${比('攻击', e.值)}</div><hr>
+    ${e.附.slice(0, 2).map(a => `<div class="ln" style="color:#7fb8ff">+${a.值}${a.单位} ${a.名}${比(a.名, a.值)}</div>`).join('')}
+    <hr><div class="dim">词缀分颜色、分层，并和身上那件比（▲▼）：玩家只有半秒钟判断捡不捡。条数少（暗黑4 在 2024 年把稀有装备砍到 2 条）。</div></div>`;
+  const 战力 = Math.round(e.值 * 12 + e.附.reduce((s, a) => s + a.值 * 9, 0));
+  const 买 = `<div class="card" style="--r:#ffcf3a"><div class="sub">第二条路：让你买</div><div class="nm">${e.名} <span style="color:#ffcf3a">+7</span></div>
+    <div style="font-size:40px;font-weight:900;color:#ffcf3a;text-align:center;font-style:italic;font-family:Bahnschrift,'Arial Narrow',system-ui,sans-serif;text-shadow:0 0 14px rgba(255,190,60,.6)">战力 ${战力.toLocaleString()}</div>
+    <div class="ln" style="color:#5be08a;text-align:center">▲ 比身上高 ${Math.round(战力 * 0.18).toLocaleString()}　全服排名 第 ${随(800, 3000)} 名</div><hr>
+    <div class="ln">强化 +8 成功率 40%，失败可能 <b style="color:#ff6b7a">爆掉</b></div><div class="ln" style="color:#ffcf3a">［保护卷轴：失败不爆］ 商城 ¥6</div>
+    <hr><div class="dim">所有属性折成一个数：好比较、能排行、能攀比，也就能卖。</div></div>`;
+  const 换 = `<div class="card" style="--r:#5be0d0"><div class="sub">第三条路：让你换个玩法</div><div class="nm">回旋之刃</div>
+    <div class="base" style="font-size:16px">冲刺时，把碰到的飞弹弹回去</div><hr>
+    <div class="ln" style="color:#5be0d0">进化：满级 + 持有「护盾符」→ 变成「风暴之刃」：每第 3 刀放一圈闪电</div>
+    <hr><div class="dim">不加多少数值，而是改变打法（像哈迪斯的祝福、吸血鬼幸存者的武器进化）。数值只会越堆越大；换个打法，每一局都不一样。</div></div>`;
+  $('pBox').innerHTML = 读 + 买 + 换;
+}
+$('pNew').onclick = 三条路; 三条路();
+
+// ③ 35 年 + 满屏卡
+const 年代 = {
+  '1990 文字地牢': {卡: `<div class="card" style="--r:#888;font-family:monospace">火焰长剑 +3 +5</div>`, 说: '没有图，名字就是说明书：+3 是命中，+5 是伤害。'},
+  '1996 前缀 + 后缀': {卡: `<div class="card" style="--r:#4aa8ff"><div class="nm">燃烧的 长剑 之迅捷</div><div class="ln">+12 火焰伤害（前缀）</div><div class="ln">+10% 攻速（后缀）</div></div>`, 说: '名字拆成前缀和后缀随机拼：30 个前缀 × 30 个后缀 = 900 种。'},
+  '2000 五色 + 镶嵌孔': {卡: `<div class="card" style="--r:#ffd23c"><div class="nm" style="color:#ffd23c">风暴之刃</div><div class="sub">稀有（白 / 蓝 / 黄 / 金 / 绿五种）</div><div class="ln" style="color:#7fb8ff">+18% 攻速</div><div class="ln" style="color:#7fb8ff">+30 生命</div><div class="ln">镶嵌孔 ◯ ◯</div></div>`, 说: '颜色让你不用读就知道值不值钱；镶嵌孔让你自己动手改装备。'},
+  '2004 六种品质色': {卡: ['#9d9d9d', '#ffffff', '#1eff00', '#0070dd', '#a335ee', '#ff8000'].map((c, i) => `<div class="card mini" style="--r:${c};display:inline-block;margin:2px"><div class="nm">${['灰', '白', '绿', '蓝', '紫', '橙'][i]}</div></div>`).join(''), 说: '灰白绿蓝紫橙六种品质，后来几乎成了全行业通用颜色：换个游戏不用重新学。'},
+  '2009 零件拼枪': {卡: `<div class="card" style="--r:#4aa8ff"><div class="nm">锋利的 猎鹰 步枪</div><div class="ln">枪身：猎鹰（射速 +）</div><div class="ln">枪管：长管（精度 +）</div><div class="ln">弹匣：大弹匣</div><div class="ln">瞄具：4 倍镜</div><div class="ln">配件：火焰</div></div>`, 说: '每个零件都随机，组合起来约一千七百多万种。'},
+  '2013 六词缀可改': {卡: `<div class="card" style="--r:#ffd23c"><div class="nm" style="color:#ffd23c">末日之触</div>${['+45 生命', '+18% 火抗', '+12% 攻速', '+30 力量', '+9% 暴击', '+15 护甲'].map(s => `<div class="ln" style="color:#7fb8ff">${s}</div>`).join('')}<div class="dim">用「改词缀的道具」重新洗（它也是钱）</div></div>`, 说: '最多 6 条词缀，而且能改：掉下来不是终点，一件装备能一直改下去。'},
+  '2024 只留两条': {卡: `<div class="card" style="--r:#ffd23c"><div class="nm" style="color:#ffd23c">稀有长剑</div><div class="base">攻击 112</div><div class="ln" style="color:#7fb8ff">+9% 暴击率</div><div class="ln" style="color:#7fb8ff">+12% 攻速</div></div>`, 说: '玩家统计出两百多种词缀、写得特别绕，于是稀有砍到 2 条、传奇 3 条：刷宝玩家天天比装备，读不过来。'},
+  '广告：满屏属性': null,
+};
+function 满屏卡(分层) {
+  const 组 = [
+    ['基础', '#ffffff', ['攻击 1,280', '全属性 +86', '暴击伤害 +45%'], 1],
+    ['附加词条', '#7fb8ff', ['+12% 暴击率', '+9% 攻速', '+240 生命', '+18% 火焰伤害', '+6% 吸血', '+30 护甲', '+11% 移速', '+15% 技能伤害']],
+    ['强化 +15', '#ffcf3a', ['攻击 +450', '全属性 +60', '防御 +120']],
+    ['镶嵌', '#ff7ad9', ['红宝石：攻击 +40', '蓝宝石：法力 +300', '紫水晶：吸血 +3%']],
+    ['洗练', '#c7a6ff', ['暴击率 +4% ◆', '技能冷却 −8% ◆']],
+    ['套装 · 烈阳（3/5）', '#5be08a', ['(2) 攻击 +10%', '(3) 火焰伤害 +20%', '(5) 每 10 秒召唤烈阳']],
+    ['传说特效', '#ff9a1a', ['攻击时 15% 几率落下陨石，造成 300% 火焰伤害']],
+    ['', '#9b97a8', ['「它记得每一个点燃过它的人。」', '——烈阳圣殿的最后一位守卫']],
+  ];
+  if (!分层) return `<div class="card full" style="--r:#ff9a1a;width:330px"><div class="nm">烈阳之戒</div>${组.flatMap(g => g[2]).map(s => `<div class="ln" style="color:#ddd">${s}</div>`).join('')}</div>`;
+  return `<div class="card full" style="--r:#ff9a1a;width:330px"><div class="nm">烈阳之戒</div><div class="ln" style="color:#ffcf3a;font-weight:800">总评：S　战力 98,600 ▲12,400</div>
+    ${组.map(([名, 色, 行, 大]) => `<div class="grp" style="background:${色}14">${名 ? `<div class="sub" style="color:${色}">${名}</div>` : ''}${行.map(s => `<div class="ln" style="color:${色};${大 ? 'font-size:17px;font-weight:800' : ''}${名 ? '' : 'font-style:italic'}">${s}</div>`).join('')}</div>`).join('')}</div>`;
+}
+for (const k in 年代) $('eYear').add(new Option(k, k));
+function 显示年代() {
+  const k = $('eYear').value, d = 年代[k];
+  if (d) { $('eCard').innerHTML = d.卡; $('eNote').innerHTML = `<b>${k}</b>：${d.说}`; return; }
+  $('eCard').innerHTML = 满屏卡($('eLayer').checked);
+  $('eNote').innerHTML = `<b>广告里的满屏卡</b>：广告只有几秒，要的是让你「哇」一声；刷宝游戏要一百个小时都读得懂。<br><br>三十多行也能读懂，靠<b>分层</b>：<br>
+    基础属性在最上、字最大 → 附加蓝色一条条 → 强化金色一组 → 宝石一颗一行 → 洗练标小记号 ◆ → 套装绿色（2/3/5 件各一条）→ 传说特效橙色 → 两句小故事压轴；最上面再放一行<b>总评</b>。<br><br>
+    <span class="dim">把上面的「分层」勾掉，看看同样的内容有多难读。</span>`;
+}
+$('eYear').onchange = 显示年代; $('eLayer').onchange = 显示年代; $('eYear').value = '广告：满屏属性'; 显示年代();
+</script>
+</body>
+</html>

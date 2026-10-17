@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>05 跳跃手感与关卡生成 · 小例子</title>
+<style>
+:root{--bg:#07051a;--panel:#140f2e;--line:#3a2d7a;--txt:#ece8ff;--dim:#a49cd0;--acc:#9b7cff}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 65% 0,#22164a,var(--bg) 60%);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:1px solid var(--line);box-shadow:0 0 18px rgba(155,124,255,.18);border-radius:12px;padding:14px}
+#stage{flex:1 1 440px;min-width:280px;max-width:960px}
+canvas{width:100%;border-radius:12px;display:block;border:1px solid var(--line);box-shadow:0 0 30px rgba(155,124,255,.25)}
+h1{font-size:18px;margin:0 0 4px;font-weight:900;font-style:italic}
+h2{font-size:13px;color:var(--acc);margin:12px 0 2px;font-weight:800;text-shadow:0 0 8px rgba(155,124,255,.6)}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+label{display:flex;gap:8px;align-items:flex-start;padding:1px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button{background:#1d1645;color:var(--txt);border:1px solid #5a47b8;border-radius:8px;padding:5px 10px;cursor:pointer;font-weight:700}
+button:hover,button.on{border-color:#7fe6ff;box-shadow:0 0 10px rgba(127,230,255,.5)}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+input[type=checkbox]{accent-color:#9b7cff;width:16px;height:16px;margin-top:2px}
+#touch{display:flex;gap:8px;margin-top:8px}
+#touch button{flex:1;padding:14px;font-size:18px;touch-action:none}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>05 跳跃：按对了就让他成功</h1>
+  <p class="tip">← → 跑，空格 / ↑ / Z 跳（按住跳得高）。关卡是现场生成的，每个坑都先用同一套物理试跳过。</p>
+  <div class="row"><button id="me" class="on">我来玩</button><button id="ai">让 AI 玩</button><button id="gen">换一关</button></div>
+  <h2>四个隐藏的帮忙</h2>
+  <div id="help"></div>
+  <h2>手感（汁水）</h2>
+  <div id="juice"></div>
+  <h2>显示</h2>
+  <div id="show"></div>
+</div>
+<div id="stage"><canvas id="c" width="900" height="480"></canvas>
+  <div id="touch"><button data-b="l">◀</button><button data-b="r">▶</button><button data-b="j">跳</button></div>
+</div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+// 单位：格（一格 = 一块砖），秒。
+const 参数 = {
+  跑速: 6,            // 格/秒
+  重力: 34,
+  起跳速度: 14,       // 最高 = 起跳速度² ÷ (2 × 重力) ≈ 2.9 格；平地最远 ≈ 4.9 格
+  松手打折: 0.45,     // 松开跳跃键时，还在上升就把速度乘这个数
+  下落重力倍: 1.5,    // 下落比上升重一点，不飘
+  土狼时间: 0.1,      // 走出平台后多久内还能跳
+  跳跃缓冲: 0.1,      // 落地前多久按的跳会被记住
+  碰头修正: 0.3,      // 头顶只蹭到角落（重叠小于这么多格）就推开
+  加速时间: 0.08,     // 从停到全速
+  关卡长度: 160,      // 格
+  坑宽: [1.5, 4.2],   // 从前到后越来越宽
+  验证余量: 0.3,      // 试跳时落点离边至少这么多格，否则把坑改窄
+  休息区间隔: 5,      // 每几段放一块休息区 + 金币
+  AI按键长短: [0.04, 0.08, 0.12, 0.16, 0.2, 0.25, 0.3, 0.4], // 8 种
+  AI起跳时机: [0, 0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21], // 8 种，一共 64 条
+};
+const 格 = 32, 高格 = 15, 身宽 = 0.6, 身高 = 0.9;
+// ===========================================================
+
+function 开关组(id, 列) {
+  const box = document.getElementById(id);
+  for (const [k, n, s, 默] of 列) { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" data-k="${k}" ${默 === false ? '' : 'checked'}><span>${n}<small>${s}</small></span>`; box.appendChild(l); }
+}
+开关组('help', [
+  ['coyote', '① 土狼时间', '走出平台 0.1 秒内照样能跳'],
+  ['buffer', '② 跳跃缓冲', '快落地时按的跳先记着'],
+  ['varjump', '③ 松手就落', '按住跳得高，松手往上的速度打折'],
+  ['corner', '④ 碰头修正', '脑袋只蹭到角，推开继续上'],
+  ['heavyfall', '下落更重', '下落重力 ×1.5，不飘'],
+]);
+开关组('juice', [
+  ['squash', '挤压拉伸', '起跳拉长、落地压扁'],
+  ['dust', '起跳落地的尘土', ''],
+  ['stop', '踩中顿一下 + 震屏 + 飘字', ''],
+]);
+开关组('show', [
+  ['check', '生成时的试跳线', '红 = 跳不过（改窄了），绿 = 能过'],
+  ['plans', 'AI 脑子里的 64 条线', '红会掉、绿能落、金是选中的'],
+]);
+const on = {};
+const 同步 = () => document.querySelectorAll('#side input').forEach(i => on[i.dataset.k] = i.checked);
+document.getElementById('side').addEventListener('change', 同步); 同步();
+
+// ---------------- 关卡 ----------------
+let 实 = [], 刺 = [], 敌 = [], 币 = [], 试跳 = [], 终点 = 0;
+const 是实 = (x, y) => { const xi = Math.floor(x), yi = Math.floor(y); if (yi < 0) return false; if (xi < 0) return true; return !!(实[xi] && 实[xi][yi]); };
+function 填(x0, x1, 高) { for (let x = x0; x < x1; x++) { 实[x] = 实[x] || []; for (let y = 0; y < 高; y++) 实[x][y] = 1; } }
+function 生成关卡() {
+  实 = []; 刺 = []; 敌 = []; 币 = []; 试跳 = [];
+  let x = 0, 高 = 3, 段 = 0;
+  填(0, 10, 高); x = 10;
+  while (x < 参数.关卡长度) {
+    段++;
+    const 进度 = x / 参数.关卡长度;
+    if (段 % 参数.休息区间隔 === 0) { // 休息区：平地 + 金币
+      填(x, x + 6, 高); for (let i = 1; i < 5; i++) 币.push({x: x + i + 0.5, y: 高 + 1.5, 吃: false}); x += 6; continue;
+    }
+    const r = Math.random();
+    if (r < 0.45) { // 坑：越往后越宽，先用最大力气试跳，跳不过就改窄
+      let 宽 = 参数.坑宽[0] + (参数.坑宽[1] - 参数.坑宽[0]) * 进度 + Math.random() * 0.8;
+      const 对面高 = Math.max(1, Math.min(7, 高 + (Math.random() < 0.5 ? 0 : Math.round(Math.random() * 2 - 1))));
+      for (let 试 = 0; 试 < 20; 试++) {
+        const w = Math.round(宽);
+        const 结果 = 模拟({x: x - 0.4, y: 高, vx: 参数.跑速, vy: 0, 地: true}, [[0, 1]], 2.5, {假地: [x + w, 对面高]});
+        试跳.push({线: 结果.线, 好: 结果.落 && 结果.落.x > x + w + 参数.验证余量, 坑x: x});
+        if (结果.落 && 结果.落.x > x + w + 参数.验证余量) { 宽 = w; break; }
+        宽 -= 0.5;
+      }
+      x += Math.round(宽); 高 = 对面高; 填(x, x + 4, 高); x += 4;
+    } else if (r < 0.65) { // 台阶
+      高 = Math.max(1, Math.min(7, 高 + (Math.random() < 0.5 ? 1 : -1) * (1 + (Math.random() < 0.3)))); 填(x, x + 4, 高); x += 4;
+    } else if (r < 0.82) { // 平地 + 敌人
+      填(x, x + 7, 高); 敌.push({x: x + 4, y: 高, x0: x + 1, x1: x + 6, vx: 1.2, 死: -1}); x += 7;
+    } else { // 浮空平台 + 头顶低砖（碰头修正用）
+      填(x, x + 8, 高); for (let i = 2; i < 5; i++) { 实[x + i] = 实[x + i] || []; 实[x + i][高 + 3] = 1; } 币.push({x: x + 3.5, y: 高 + 4.5, 吃: false}); x += 8;
+    }
+  }
+  填(x, x + 12, 高); 终点 = x + 6;
+  重生();
+}
+
+// ---------------- 物理（玩家和 AI 用同一套） ----------------
+function 碰撞盒(x, y) { return [[x - 身宽 / 2, y], [x + 身宽 / 2, y], [x - 身宽 / 2, y + 身高], [x + 身宽 / 2, y + 身高]]; }
+function 物理步(p, dt, 跳按住, 地面函数 = 是实) {
+  // 重力
+  const g = 参数.重力 * (on.heavyfall && p.vy < 0 ? 参数.下落重力倍 : 1);
+  if (!p.地) p.vy -= g * dt;
+  if (on.varjump && !跳按住 && p.vy > 0 && !p.已折) { p.vy *= 参数.松手打折; p.已折 = true; }
+  // 横向
+  let nx = p.x + p.vx * dt;
+  for (const yy of [p.y + 0.1, p.y + 身高 / 2, p.y + 身高 - 0.05]) if (地面函数(nx + Math.sign(p.vx) * 身宽 / 2, yy)) { nx = p.x; p.vx = 0; p.撞墙 = true; break; }
+  p.x = nx;
+  // 纵向
+  let ny = p.y + p.vy * dt;
+  if (p.vy > 0) { // 撞头
+    const 左 = 地面函数(p.x - 身宽 / 2 + 0.02, ny + 身高), 右 = 地面函数(p.x + 身宽 / 2 - 0.02, ny + 身高);
+    if (左 || 右) {
+      let 修 = false;
+      if (on.corner && 左 !== 右) { // 只蹭到一个角：看重叠多少，小就推开
+        const 边 = 左 ? Math.ceil(p.x - 身宽 / 2) : Math.floor(p.x + 身宽 / 2), 重叠 = 左 ? 边 - (p.x - 身宽 / 2) : (p.x + 身宽 / 2) - 边;
+        if (重叠 < 参数.碰头修正) { p.x += 左 ? 重叠 + 0.01 : -重叠 - 0.01; 修 = true; p.修正 = 1; }
+      }
+      if (!修) { ny = Math.floor(ny + 身高) - 身高 - 0.001; p.vy = 0; }
+    }
+  }
+  p.地 = false;
+  if (p.vy <= 0 && (地面函数(p.x - 身宽 / 2 + 0.05, ny) || 地面函数(p.x + 身宽 / 2 - 0.05, ny))) { ny = Math.floor(ny) + 1; p.vy = 0; p.地 = true; }
+  p.y = ny;
+}
+// 计划式模拟：跑满速往右，plan = [[几秒后按, 按多久]]。返回落点和轨迹
+function 模拟(起, plan, T, 选 = {}) {
+  const p = {...起, 已折: false}, 线 = [];
+  const 地面 = 选.假地 ? (x, y) => { const [x0, h] = 选.假地; if (x >= x0 && x < x0 + 6 && y < h && y >= 0) return true; if (x >= x0) return false; return 是实(x, y); } : 是实;
+  let t = 0, 起跳 = -1, 按到 = -1, 起地 = false;
+  const dt = 1 / 120, 计划 = plan.slice();
+  while (t < T) {
+    if (计划.length && t >= 计划[0][0] && p.地) { p.vy = 参数.起跳速度; p.地 = false; p.已折 = false; 起跳 = t; 按到 = t + 计划[0][1]; 计划.shift(); 起地 = true; }
+    p.vx = 参数.跑速;
+    const 旧折 = on.varjump; 物理步(p, dt, t < 按到, 地面);
+    线.push([p.x, p.y]);
+    if (p.y < -2) return {线, 落: null, 掉: true};
+    if (起地 && p.地 && t - 起跳 > 0.05) return {线, 落: {x: p.x, y: p.y}, 踩: 选.敌 ? 选.敌(p) : 0};
+    if (选.敌 && 选.敌(p) < 0) return {线, 落: null, 撞: true};
+    t += dt;
+  }
+  return {线, 落: p.地 ? {x: p.x, y: p.y} : null};
+}
+
+// ---------------- 玩家 ----------------
+let 我, 相机x = 0, 震 = 0, 尘 = [], 字 = [], 模式 = '我', AI计划 = null, AI线 = [], 时 = 0, 顿 = 0, 存档x = 2;
+function 地面高(x) { let y = 高格; while (y > 0 && !是实(x, y - 1)) y--; return y; }
+function 重生() { 我 = {x: 存档x, y: 地面高(存档x), vx: 0, vy: 0, 地: false, 离地时: -9, 按跳时: -9, 扁: 0, 修正: 0, 已折: true}; AI计划 = null; }
+const 键 = {};
+addEventListener('keydown', e => { const k = e.key.toLowerCase(); if ([' ', 'arrowup', 'z'].includes(k)) { if (!键.j) 我.按跳时 = 时; 键.j = true; e.preventDefault(); } if (k === 'arrowleft' || k === 'a') 键.l = true; if (k === 'arrowright' || k === 'd') 键.r = true; });
+addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ([' ', 'arrowup', 'z'].includes(k)) 键.j = false; if (k === 'arrowleft' || k === 'a') 键.l = false; if (k === 'arrowright' || k === 'd') 键.r = false; });
+document.querySelectorAll('#touch button').forEach(b => {
+  b.onpointerdown = e => { e.preventDefault(); 键[b.dataset.b] = true; if (b.dataset.b === 'j') 我.按跳时 = 时; };
+  b.onpointerup = b.onpointerleave = () => 键[b.dataset.b] = false;
+});
+document.getElementById('me').onclick = () => { 模式 = '我'; document.getElementById('me').classList.add('on'); document.getElementById('ai').classList.remove('on'); 存档x = 2; 重生(); };
+document.getElementById('ai').onclick = () => { 模式 = 'AI'; document.getElementById('ai').classList.add('on'); document.getElementById('me').classList.remove('on'); 存档x = 2; 重生(); };
+document.getElementById('gen').onclick = () => { 存档x = 2; 生成关卡(); };
+
+function 起跳(p) { p.vy = 参数.起跳速度; p.地 = false; p.已折 = false; p.离地时 = -9; if (on.squash) p.扁 = -1; 扬尘(p.x, p.y, 6); }
+function 扬尘(x, y, n) { if (!on.dust) return; for (let i = 0; i < n; i++) 尘.push({x, y, vx: (Math.random() - 0.5) * 3, vy: Math.random() * 1.5, t: 时}); }
+
+// AI：每到一个危险前，把 64 种「什么时候按、按多久」都在脑子里跳一遍，挑落点离边最远的
+function 前方危险(p) {
+  for (let d = 0.6; d < 5; d += 0.25) {
+    const x = p.x + d;
+    if (!是实(x, p.y - 0.5) || 是实(x, p.y + 0.5)) return true;
+    for (const e of 敌) if (e.死 < 0 && Math.abs(e.x - x) < 0.6 && Math.abs(e.y - p.y) < 1) return true;
+  }
+  return false;
+}
+function 边距(x, y) { let l = 0, r = 0; while (l < 4 && 是实(x - l - 0.3, y - 0.5)) l += 0.25; while (r < 4 && 是实(x + r + 0.3, y - 0.5)) r += 0.25; return Math.min(l, r); }
+function AI想() {
+  const 候选 = [];
+  const 敌判 = q => { for (const e of 敌) if (e.死 < 0 && Math.abs(q.x - e.x) < 0.7 && q.y < e.y + 0.8 && q.y + 身高 > e.y) return q.vy < 0 && q.y > e.y + 0.4 ? 1 : -1; return 0; };
+  for (const t0 of 参数.AI起跳时机) for (const h of 参数.AI按键长短) {
+    const r = 模拟({x: 我.x, y: 我.y, vx: 参数.跑速, vy: 0, 地: true}, [[t0, h]], 2.2, {敌: 敌判});
+    let 分 = -99;
+    // 打分：落点离边越远越稳，能踩到敌人加分；必须往前跳过去（落回原地不算）
+    if (r.落 && !r.撞) 分 = r.落.x - 我.x < 1.2 ? -50 : 边距(r.落.x, r.落.y) + (r.踩 > 0 ? 2 : 0) + (r.落.x - 我.x) * 0.15;
+    候选.push({t0, h, 线: r.线, 分});
+  }
+  候选.sort((a, b) => b.分 - a.分);
+  AI线 = 候选.map((c, i) => ({线: c.线, 色: i === 0 ? '#ffc84a' : c.分 > -50 ? '#4dff8e55' : '#ff4d4d55'}));
+  AI计划 = {开始: 时, ...候选[0]};
+}
+
+// ---------------- 每帧 ----------------
+let 上帧 = performance.now(), 累 = 0;
+function 帧(now) {
+  const 真dt = Math.max(0, Math.min(0.05, (now - 上帧) / 1000)); 上帧 = now; 累 += 真dt;
+  while (累 > 1 / 120) { 累 -= 1 / 120; 一步(1 / 120); }
+  画(); requestAnimationFrame(帧);
+}
+function 一步(dt) {
+  时 += dt;
+  if (顿 > 0) { 顿 -= dt; return; }
+  const p = 我;
+  let 按住 = 键.j, 想跳 = false;
+  if (模式 === '我') {
+    const 目标 = ((键.r ? 1 : 0) - (键.l ? 1 : 0)) * 参数.跑速;
+    p.vx += Math.sign(目标 - p.vx) * Math.min(Math.abs(目标 - p.vx), 参数.跑速 / 参数.加速时间 * dt);
+    // 跳：缓冲（刚刚按过）+ 土狼（刚刚离地）
+    const 刚按 = 时 - p.按跳时 <= (on.buffer ? 参数.跳跃缓冲 : 1 / 60);
+    const 能跳 = p.地 || (on.coyote && 时 - p.离地时 <= 参数.土狼时间);
+    if (刚按 && 能跳) { 想跳 = true; p.按跳时 = -9; }
+  } else {
+    p.vx = 参数.跑速;
+    if (AI计划 && !AI计划.跳了 && (!p.地 || 时 - AI计划.开始 > AI计划.t0 + 0.05)) AI计划 = null; // 计划过期（比如走下了台阶）：重新想
+    if (p.地 && !AI计划 && 前方危险(p)) AI想();
+    if (AI计划 && p.地 && 时 - AI计划.开始 >= AI计划.t0 && !AI计划.跳了) { 想跳 = true; AI计划.跳了 = 时; }
+    按住 = AI计划 && AI计划.跳了 && 时 - AI计划.跳了 < AI计划.h;
+    if (AI计划 && AI计划.跳了 && p.地 && 时 - AI计划.跳了 > 0.1) AI计划 = null;
+  }
+  const 原地 = p.地;
+  if (想跳) 起跳(p);
+  物理步(p, dt, 按住 || 模式 === 'AI' && !!按住);
+  if (原地 && !p.地 && !想跳) p.离地时 = 时;
+  if (!原地 && p.地) { if (on.squash) p.扁 = 1; 扬尘(p.x, p.y, 8); }
+  p.扁 *= Math.exp(-dt * 10); p.修正 *= Math.exp(-dt * 6);
+  // 敌人
+  for (const e of 敌) {
+    if (e.死 >= 0) continue;
+    e.x += e.vx * dt; if (e.x < e.x0 || e.x > e.x1) e.vx *= -1;
+    if (Math.abs(p.x - e.x) < 0.7 && p.y < e.y + 0.8 && p.y + 身高 > e.y) {
+      if (p.vy < 0 && p.y > e.y + 0.35) { e.死 = 时; p.vy = 参数.起跳速度 * 0.7; p.地 = false; if (on.stop) { 顿 = 0.06; 震 = 0.25; 字.push({x: e.x, y: e.y + 1, 文: '踩!', t: 时}); } 扬尘(e.x, e.y, 10); }
+      else { 字.push({x: p.x, y: p.y + 1.5, 文: '疼', t: 时}); 重生(); return; }
+    }
+  }
+  for (const c of 币) if (!c.吃 && Math.abs(c.x - p.x) < 0.6 && Math.abs(c.y - (p.y + 0.5)) < 0.8) { c.吃 = true; if (on.stop) 字.push({x: c.x, y: c.y, 文: '+1', t: 时}); }
+  if (p.y < -3) { 字.push({x: p.x, y: 2, 文: '掉下去了', t: 时}); 重生(); }
+  if (p.x > 终点) { 字.push({x: p.x, y: p.y + 2, 文: '通关！', t: 时}); 存档x = 2; setTimeout(生成关卡, 600); 终点 = 1e9; }
+  if (p.地 && p.x > 存档x + 20 && !前方危险(p) && 是实(p.x - 1, p.y - 0.5)) 存档x = Math.floor(p.x) + 0.5; // 只在前后都安全的平地上存档
+  for (const d of 尘) { d.x += d.vx * dt; d.y += d.vy * dt; }
+  尘 = 尘.filter(d => 时 - d.t < 0.4); 字 = 字.filter(z => 时 - z.t < 0.8);
+  震 *= Math.exp(-dt * 10);
+  相机x += (p.x - 8 - 相机x) * Math.min(1, dt * 6);
+}
+
+// ---------------- 画：深紫夜色 + 发光描边的方块小人 ----------------
+const W = 900, H = 480;
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * dpr; cv.height = H * dpr;
+const g = cv.getContext('2d');
+const 屏 = (x, y) => [(x - 相机x) * 格, H - (y + 0.5) * 格];
+const 发光 = (色, 糊) => { g.shadowColor = 色; g.shadowBlur = 糊; }, 不发光 = () => { g.shadowBlur = 0; };
+function 圆角(x, y, w, h, r) { r = Math.max(0, Math.min(r, h / 2, w / 2)); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+let 残影 = [];
+// 方块小人：深色身子、亮描边、两只眼睛看着前进方向
+function 画方块(cx, 底y, w, h, 色, 眼向, 透 = 1, 眼 = true) {
+  g.globalAlpha = 透;
+  g.fillStyle = '#121a2e'; 圆角(cx - w / 2, 底y - h, w, h, 5); g.fill();
+  if (透 === 1) 发光(色, 12);
+  g.strokeStyle = 色; g.lineWidth = 3; g.stroke(); 不发光();
+  if (眼) { g.fillStyle = '#ffffff'; const ex = cx + 眼向 * w * 0.14; g.fillRect(ex - w * 0.2, 底y - h * 0.72, w * 0.13, h * 0.24); g.fillRect(ex + w * 0.07, 底y - h * 0.72, w * 0.13, h * 0.24); }
+  g.globalAlpha = 1;
+}
+function 画() {
+  g.setTransform(dpr, 0, 0, dpr, (Math.random() - 0.5) * 震 * 20 * dpr, (Math.random() - 0.5) * 震 * 20 * dpr);
+  const 天 = g.createLinearGradient(0, 0, 0, H); 天.addColorStop(0, '#07051a'); 天.addColorStop(0.7, '#160f33'); 天.addColorStop(1, '#22164a');
+  g.fillStyle = 天; g.fillRect(-20, -20, W + 40, H + 40);
+  // 远处的星点（跟镜头慢慢走，有一点纵深）
+  g.fillStyle = 'rgba(180,170,255,.35)';
+  for (let i = 0; i < 70; i++) { const sx = ((i * 137.5 - 相机x * 格 * 0.15) % W + W) % W, sy = (i * 71.3) % (H * 0.7); g.fillRect(sx, sy, i % 5 ? 1.5 : 2.5, i % 5 ? 1.5 : 2.5); }
+  const x0 = Math.floor(相机x) - 1, x1 = x0 + W / 格 + 2;
+  // 地面：一整块深紫，顶上一道亮紫边
+  for (let x = Math.max(0, x0); x < x1; x++) if (实[x]) for (let y = 0; y < 高格; y++) if (实[x][y]) {
+    const [sx, sy] = 屏(x, y + 1), 顶 = !实[x][y + 1];
+    g.fillStyle = 顶 ? '#2c2160' : '#1d1645'; g.fillRect(sx, sy, 格 + 0.5, 格 + 0.5);
+    g.fillStyle = 'rgba(122,92,255,.12)'; if ((x + y) % 2) g.fillRect(sx, sy, 格, 格);
+  }
+  发光('#8f6bff', 10); g.fillStyle = '#9b7cff';
+  for (let x = Math.max(0, x0); x < x1; x++) if (实[x]) for (let y = 0; y < 高格; y++) if (实[x][y] && !实[x][y + 1]) { const [sx, sy] = 屏(x, y + 1); g.fillRect(sx, sy - 1, 格 + 0.5, 4); }
+  不发光();
+  if (on.check) for (const s of 试跳) if (s.坑x > x0 - 6 && s.坑x < x1) { g.strokeStyle = s.好 ? '#3dff9a' : '#ff4d6a'; g.lineWidth = 2; g.setLineDash([6, 5]); g.beginPath(); s.线.forEach(([x, y], i) => { const [a, b] = 屏(x, y + 身高 / 2); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.stroke(); g.setLineDash([]); }
+  if (on.plans && 模式 === 'AI') for (const l of AI线) { const 选中 = l.色 === '#ffc84a'; if (选中) 发光('#ffc84a', 10); g.strokeStyle = l.色; g.lineWidth = 选中 ? 3 : 1; g.beginPath(); l.线.forEach(([x, y], i) => { const [a, b] = 屏(x, y + 身高 / 2); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.stroke(); 不发光(); }
+  // 金币：发光的黄圆，转着
+  for (const c of 币) if (!c.吃) { const [sx, sy] = 屏(c.x, c.y); 发光('#ffd23c', 14); g.fillStyle = '#ffd23c'; g.beginPath(); g.ellipse(sx, sy, 7 * Math.abs(Math.sin(时 * 4 + c.x)) + 2, 9, 0, 0, 7); g.fill(); 不发光(); }
+  // 敌人：粉红描边的方块，被踩扁
+  for (const e of 敌) { if (e.死 >= 0 && 时 - e.死 > 0.4) continue; const [sx, sy] = 屏(e.x, e.y); const 扁 = e.死 >= 0 ? 0.3 : 1; 画方块(sx, sy + 格 / 2, 26 * (2 - 扁), 24 * 扁, '#ff4d8a', Math.sign(e.vx), 1, 扁 === 1); }
+  // 终点旗
+  { const [sx] = 屏(终点, 0); 发光('#3fe0ff', 10); g.fillStyle = '#cfefff'; g.fillRect(sx, 40, 3, H); g.fillStyle = '#3fe0ff'; g.beginPath(); g.moveTo(sx + 3, 40); g.lineTo(sx + 36, 52); g.lineTo(sx + 3, 64); g.fill(); 不发光(); }
+  for (const d of 尘) { const a = (时 - d.t) / 0.4, [sx, sy] = 屏(d.x, d.y - 0.4); g.fillStyle = `rgba(190,170,255,${0.7 * (1 - a)})`; g.fillRect(sx - 2 - 3 * a, sy - 2 - 3 * a, 4 + 6 * a, 4 + 6 * a); }
+  // 玩家：残影（越早越淡）+ 起跳拉长、落地压扁
+  { const p = 我, s = p.扁 * 0.3, w = 身宽 * 格 * (1 + s), h = 身高 * 格 * (1 - s), 色 = p.修正 > 0.2 ? '#ffc84a' : '#7fe6ff';
+    残影.push({x: p.x, y: p.y, w, h, t: 时}); 残影 = 残影.filter(r => 时 - r.t < 0.14);
+    for (let i = 0; i < 残影.length - 1; i += 3) { const r = 残影[i], [sx, sy] = 屏(r.x, r.y); if (Math.hypot(r.x - p.x, r.y - p.y) > 0.15) 画方块(sx, sy + 格 / 2, r.w, r.h, '#3a8cff', 1, 0.25 * (1 - (时 - r.t) / 0.14), false); }
+    const [sx, sy] = 屏(p.x, p.y); 画方块(sx, sy + 格 / 2, w, h, 色, p.vx < -0.1 ? -1 : 1); }
+  for (const z of 字) { const a = (时 - z.t) / 0.8, [sx, sy] = 屏(z.x, z.y + a); g.globalAlpha = 1 - a; g.font = '900 italic 24px system-ui,sans-serif'; g.textAlign = 'center'; g.lineWidth = 5; g.strokeStyle = '#07051a'; g.strokeText(z.文, sx, sy); 发光('#ffd23c', 12); g.fillStyle = '#ffe680'; g.fillText(z.文, sx, sy); 不发光(); g.globalAlpha = 1; }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = '#b8b0e8'; g.font = '700 13px system-ui'; g.textAlign = 'left';
+  g.fillText(`最高能跳 ${(参数.起跳速度 ** 2 / 2 / 参数.重力).toFixed(1)} 格 · 平地最远 ${(参数.跑速 * 2 * 参数.起跳速度 / 参数.重力).toFixed(1)} 格 · ${模式 === 'AI' ? 'AI 在玩' : '你在玩'}`, 12, 22);
+}
+生成关卡();
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

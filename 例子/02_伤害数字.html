@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>02 伤害数字 · 小例子</title>
+<style>
+:root{--ink:#4a1f5c;--txt:#4a1f5c;--dim:#8a6a96;--acc:#ff2f78;--panel:#fffaf0}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 60% 20%,#fbfff2,#cdeeff 55%,#9fd6ff);color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px;min-height:100vh}
+#side{flex:0 1 300px;background:var(--panel);border:4px solid var(--ink);box-shadow:0 6px 0 var(--ink);border-radius:18px;padding:14px}
+#stage{flex:1 1 440px;min-width:280px;max-width:900px}
+canvas{width:100%;border-radius:18px;display:block;border:4px solid var(--ink);box-shadow:0 6px 0 var(--ink)}
+h1{font-size:18px;margin:0 0 4px;font-weight:900}
+h2{font-size:13px;color:var(--acc);margin:12px 0 2px;font-weight:900}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+label{display:flex;gap:8px;align-items:flex-start;padding:1px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button{background:#fff;color:var(--ink);border:3px solid var(--ink);border-radius:999px;padding:4px 11px;cursor:pointer;font-weight:900;box-shadow:0 3px 0 var(--ink)}
+button:hover{background:#ffe3f1}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+button[data-p=all]{background:#ffd23f}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+select{background:#fff;color:var(--ink);border:3px solid var(--ink);border-radius:10px;padding:3px;font-weight:700}
+input[type=checkbox]{accent-color:#ff2f78;width:16px;height:16px;margin-top:2px}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>02 伤害数字：数字可以多，但要排队</h1>
+  <p class="tip">左边的小勇者自动打右边的史莱姆，史莱姆也会还手。点预设，或一项一项开关。</p>
+  <div class="row">
+    <button data-p="off">全关</button><button data-p="maple">冒险岛式</button><button data-p="sides">分边式</button><button data-p="words">换成文字</button><button data-p="all">推荐全开</button>
+  </div>
+  <label>伤害量级
+    <select id="mul"><option value="1">前期（几百）</option><option value="1000">中期（几十万）</option><option value="1000000">后期（几亿）</option><option value="100000000">放置（几百亿）</option></select>
+  </label>
+  <div id="toggles"></div>
+</div>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 参数 = {
+  一生: 1.0,             // 秒：弹出→上飘→淡出
+  弹出时长: 0.12,         // 弹出时冲过头再回来
+  弹出过冲: 1.2,          // 最大放大到 1.2 倍
+  上飘: 60,               // 像素
+  基础字号: 40,
+  错开: 34,               // 左右随机错开的像素，左右交替
+  合并窗口: 0.6,          // 秒：同一目标这段时间内的伤害合成一个数
+  缩写起点: 10000,        // 超过就写成「1.2万」「3.4亿」
+  每位放大: 0.05,         // 每多一位数，字大 5%
+  最大倍: 2.0, 最小倍: 0.7,
+  平均窗口: 5,            // 秒：「跟自己比」时看最近几秒的平均伤害
+  行距: 1.1,              // 一下一行：行距 = 字号 × 1.1（暴击那行不放大，只换色加标记，免得压住别的行）
+  一行一拍: 0.06,         // 秒：每行间隔
+  抛出速度: 150, 抛起: 300, 重力: 700,  // 分边：往外抛再掉下来
+  一字一拍: 0.09,         // 文字模式：每个字间隔
+  描边: 0.22,             // 描边宽度 = 字号 × 22%
+  // 糖果字：上面浅、下面深的两种颜色
+  颜色: {普通: ['#ffffff', '#ded6ee'], 暴击: ['#fff1b8', '#ff7a1a'], 治疗: ['#e8fff4', '#1fc489'], 未命中: ['#ffffff', '#a9a3b8'], 挨打: ['#f0e0ff', '#9b4dff'],
+         冒险岛打怪: ['#fff3c4', '#ff8a1e'], 冒险岛暴击: ['#ffd6e7', '#ff2f78']},
+  五档: [['挠痒痒', 0.5], ['有点疼', 1], ['好疼', 2], ['痛死了', 4], ['要命', Infinity]], // 伤害 ÷ 平时平均 < 右边的数
+  五档色: [['#ffffff', '#cfc6e0'], ['#fffbe0', '#f5b800'], ['#fff3c4', '#ff8a1e'], ['#ffe0d0', '#ff4d2a'], ['#ffd6e7', '#e0004a']],
+};
+// ===========================================================
+
+const 项 = [
+  ['基础', [
+    ['pop', '弹出回弹', '先压扁再弹高，冲过头再回来，像蹦出来的'],
+    ['color', '颜色和大小说话', '暴击金红大一号还抖、治疗绿、未命中灰'],
+  ]],
+  ['数字多了怎么办', [
+    ['scatter', '错开', '随机偏一点，左右交替'],
+    ['merge', '合并', '连打同一个敌人，加成一个总数'],
+    ['abbr', '缩写', '125万、3.4亿'],
+    ['rank', '主次', '普通的小、半透明；暴击实心压最上'],
+  ]],
+  ['大小跟着伤害走', [
+    ['digits', '按位数放大（带上下限）', '每多一位 +5%，0.7～2 倍'],
+    ['self', '跟自己平时比', '比最近 5 秒平均高的才放大'],
+  ]],
+  ['冒险岛：有秩序', [
+    ['rows', '一下一行、一行一拍', '一招七下就七行往上摞，像打鼓'],
+    ['fat', '胖字粗描边', '字挨着字，整行像一张贴纸'],
+  ]],
+  ['分清谁打谁', [
+    ['sides', '分边 + 走弧线', '都绕着你：打出去的往左抛，挨的往右抛'],
+    ['hurt', '挨打的更重', '紫色、更大、抖一下'],
+  ]],
+  ['换成文字', [
+    ['words', '五档文字', '挠痒痒 → 要命，一字一拍'],
+    ['tags', '字当标签', '弱点贴 WEAK，破盾整屏 BREAK'],
+  ]],
+];
+const on = {};
+const box = document.getElementById('toggles');
+for (const [组, 列] of 项) {
+  const h = document.createElement('h2'); h.textContent = 组; box.appendChild(h);
+  for (const [k, n, s] of 列) {
+    const l = document.createElement('label');
+    l.innerHTML = `<input type="checkbox" data-k="${k}"><span>${n}<small>${s}</small></span>`;
+    box.appendChild(l);
+  }
+}
+const 同步 = () => { for (const i of box.querySelectorAll('input')) on[i.dataset.k] = i.checked; };
+const 设 = ks => { for (const i of box.querySelectorAll('input')) i.checked = ks.includes(i.dataset.k); 同步(); };
+box.addEventListener('change', 同步);
+const 预设 = {
+  off: [],
+  maple: ['pop', 'color', 'rows', 'fat', 'abbr'],
+  sides: ['pop', 'color', 'sides', 'hurt', 'abbr', 'fat'],
+  words: ['pop', 'color', 'words', 'tags', 'rank', 'scatter', 'fat', 'sides'],
+  all: ['pop', 'color', 'scatter', 'abbr', 'rank', 'digits', 'self', 'rows', 'fat', 'sides', 'hurt', 'tags'],
+};
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => 设(预设[b.dataset.p]));
+设(预设.all);
+const mulSel = document.getElementById('mul');
+
+// ---------------- 场景 ----------------
+const W = 760, H = 560, 地 = 470, INK = '#4a1f5c';
+const cv = document.getElementById('c'), dpr = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * dpr; cv.height = H * dpr;
+const g = cv.getContext('2d');
+const 英雄 = {x: 230, y: 地, 高: 150, 抖: 0, 闪: -9, 挥: -9}, 桩 = {x: 530, y: 地, 高: 150, 抖: 0, 闪: -9, 盾: 0, 暴: false};
+let 字们 = [], 记录 = [], 时 = 0, 下一招 = 0.5, 招数 = 0, 下一还手 = 2, 下一治疗 = 4, 大字 = null, 星们 = [];
+
+function 平均() {
+  const r = 记录.filter(a => 时 - a.t < 参数.平均窗口);
+  return r.length ? r.reduce((s, a) => s + a.v, 0) / r.length : 120 * +mulSel.value;
+}
+function 写(v) {
+  if (!on.abbr || v < 参数.缩写起点) return String(Math.round(v));
+  const 单 = [[1e12, '万亿'], [1e8, '亿'], [1e4, '万']];
+  for (const [n, u] of 单) if (v >= n) { const x = v / n; return (x >= 100 ? Math.round(x) : x.toFixed(1).replace(/\.0$/, '')) + u; }
+}
+// 新建一个数字
+function 出(目标, v, 种, 额外 = {}) {
+  const 自己打的 = 目标 === 桩;
+  if (种 !== '治疗' && 种 !== '未命中' && 自己打的) 记录.push({t: 时, v});
+  // 合并：同一目标、合并窗口内、非多段排队时，加进上一个数
+  if (on.merge && 种 === '普通' && !额外.行) {
+    const 旧 = 字们.find(z => z.目标 === 目标 && z.种 === '普通' && 时 - z.t < 参数.合并窗口 && !z.行);
+    if (旧) { 旧.v += v; 旧.t = 时; 旧.合 = (旧.合 || 1) + 1; return; }
+  }
+  const 序 = 字们.length;
+  const z = {目标, v, 种, t: 时 + (额外.延迟 || 0), x: 目标.x, y: 目标.y - 目标.高 - 40, 序, ...额外};
+  if (on.scatter && !额外.行) z.x += (序 % 2 ? 1 : -1) * Math.random() * 参数.错开;
+  if (on.sides) { // 分边：都绕着「你」的角色走——打出去的往左抛，挨的往右抛
+    const 向 = 自己打的 ? -1 : 1;
+    z.x = 英雄.x + 向 * 30; z.y = 英雄.y - 英雄.高 - 10;
+    z.vx = 向 * 参数.抛出速度 * (0.7 + Math.random() * 0.6); z.vy = -参数.抛起 * (0.8 + Math.random() * 0.4);
+  }
+  z.相对 = v / 平均();
+  字们.push(z);
+  if (自己打的 && 种 !== '未命中') 星们.push({x: 桩.x + (Math.random() - 0.5) * 120, y: 地 - 40 - Math.random() * 100, t: 时 + (额外.延迟 || 0), 大: 种 === '暴击' ? 1.6 : 1});
+}
+
+function 出招() {
+  const m = +mulSel.value; 招数++;
+  英雄.挥 = 时;
+  if (招数 % 4 === 0) { // 一招打七下
+    for (let i = 0; i < 7; i++) {
+      const 暴 = Math.random() < 0.2;
+      出(桩, (80 + Math.random() * 40) * m * (暴 ? 2.5 : 1), 暴 ? '暴击' : '普通', {行: i, 延迟: on.rows ? i * 参数.一行一拍 : i * 0.05});
+    }
+  } else {
+    const r = Math.random();
+    if (r < 0.06) 出(桩, 0, '未命中');
+    else {
+      const 暴 = r > 0.8, 弱 = r > 0.68 && r <= 0.8;
+      出(桩, (100 + Math.random() * 60) * m * (暴 ? 3 : 弱 ? 1.6 : 1), 暴 ? '暴击' : '普通', {弱});
+      桩.暴 = 暴;
+    }
+  }
+  桩.闪 = 时; 桩.抖 = 1; 桩.盾++;
+  if (桩.盾 >= 18) { 桩.盾 = 0; if (on.tags) 大字 = {文: 'BREAK', t: 时}; }
+}
+
+// ---------------- 每帧 ----------------
+let 上帧 = performance.now();
+function 帧(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - 上帧) / 1000)); 上帧 = now; 时 += dt;
+  if (时 > 下一招) { 出招(); 下一招 = 时 + (招数 % 4 === 0 ? 0.9 : 0.42); }
+  if (时 > 下一还手) { 出(英雄, (60 + Math.random() * 50) * +mulSel.value, '挨打'); 英雄.闪 = 时; 英雄.抖 = 1; 下一还手 = 时 + 1.4 + Math.random(); }
+  if (时 > 下一治疗) { 出(英雄, 200 * +mulSel.value, '治疗'); 下一治疗 = 时 + 4.5; }
+  英雄.抖 *= Math.exp(-dt * 10); 桩.抖 *= Math.exp(-dt * 10);
+  for (const z of 字们) if (z.vx !== undefined && 时 > z.t) { z.vy += 参数.重力 * dt; z.x += z.vx * dt; z.y += z.vy * dt; }
+  字们 = 字们.filter(z => 时 - z.t < 参数.一生 * (on.words ? 1.4 : 1));
+  星们 = 星们.filter(s => 时 - s.t < 0.35);
+  if (大字 && 时 - 大字.t > 0.9) 大字 = null;
+  画();
+  requestAnimationFrame(帧);
+}
+
+// ---------------- 糖果字：深色描边 + 往下错一点的「厚度」+ 上浅下深的渐变 + 顶上一道高光 ----------------
+const 字体 = '"Arial Rounded MT Bold","Segoe UI Black","Arial Black","PingFang SC","Microsoft YaHei",sans-serif';
+function 糖字(文, x, y, 号, [c1, c2], 胖 = true, 对齐 = 'center') {
+  g.textAlign = 对齐; g.textBaseline = 'middle';
+  if (!胖) { g.font = `400 ${号}px system-ui,sans-serif`; g.fillStyle = c2 === '#ded6ee' ? '#fff' : c2; g.fillText(文, x, y); return; }
+  g.font = `900 ${号}px ${字体}`;
+  if ('letterSpacing' in g) g.letterSpacing = `${-号 * 0.05}px`;   // 字挨着字
+  g.lineJoin = 'round'; g.lineWidth = Math.max(4, 号 * 参数.描边); g.strokeStyle = INK;
+  g.strokeText(文, x, y + 号 * 0.09); g.fillStyle = INK; g.fillText(文, x, y + 号 * 0.09);
+  g.strokeText(文, x, y);
+  const 渐 = g.createLinearGradient(0, y - 号 * 0.5, 0, y + 号 * 0.5); 渐.addColorStop(0, c1); 渐.addColorStop(0.22, c1); 渐.addColorStop(0.7, c2);
+  g.fillStyle = 渐; g.fillText(文, x, y);
+  const 光 = g.createLinearGradient(0, y - 号 * 0.5, 0, y + 号 * 0.5); 光.addColorStop(0, 'rgba(255,255,255,.85)'); 光.addColorStop(0.38, 'rgba(255,255,255,0)');
+  g.fillStyle = 光; g.fillText(文, x, y);
+  if ('letterSpacing' in g) g.letterSpacing = '0px';
+}
+const 宽 = (文, 号, 胖 = true) => { g.font = 胖 ? `900 ${号}px ${字体}` : `400 ${号}px system-ui`; if ('letterSpacing' in g) g.letterSpacing = 胖 ? `${-号 * 0.05}px` : '0px'; const w = g.measureText(文).width; if ('letterSpacing' in g) g.letterSpacing = '0px'; return w; };
+
+// ---------------- 背景：放射光 + 飘的圆点 + 草地平台 ----------------
+function 画背景() {
+  const 底 = g.createRadialGradient(W / 2, H * 0.55, 0, W / 2, H * 0.55, W * 0.7);
+  底.addColorStop(0, '#fbfff2'); 底.addColorStop(0.5, '#d4f3ff'); 底.addColorStop(1, '#9fd6ff');
+  g.fillStyle = 底; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(W / 2, H * 0.62); g.rotate(时 * 5 * Math.PI / 180); g.fillStyle = 'rgba(255,255,255,.3)';
+  for (let i = 0; i < 18; i++) { g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, 900, i * Math.PI / 9, i * Math.PI / 9 + Math.PI / 18); g.fill(); }
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,.45)';
+  for (let x = -70; x < W + 70; x += 70) for (let y = -70; y < H + 70; y += 70) { g.beginPath(); g.arc(x + (时 * 20) % 70, y + (时 * 12) % 70, 7, 0, 7); g.fill(); }
+  const 草 = g.createLinearGradient(0, 地, 0, H); 草.addColorStop(0, '#c7f59a'); 草.addColorStop(1, '#8fdc6a');
+  g.fillStyle = 草; 圆角(40, 地, W - 80, 64, 32); g.fill(); g.strokeStyle = INK; g.lineWidth = 5; g.stroke();
+}
+function 圆角(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+
+// 小勇者：蓝头巾、拿剑；挨打时抖一下、眼睛变 > <
+function 画勇者() {
+  const a = 时 - 英雄.闪, 疼 = a < 0.25, sh = 疼 ? Math.sin(a * 90) * 8 * (1 - a / 0.25) : 0;
+  const 挥 = 时 - 英雄.挥, 剑角 = 挥 < 0.18 ? -Math.sin(挥 / 0.18 * Math.PI) * 1.4 : 0;
+  g.save(); g.translate(英雄.x + sh, 英雄.y); g.scale(0.8, 0.8);
+  g.fillStyle = 'rgba(74,31,92,.18)'; g.beginPath(); g.ellipse(0, 4, 80, 14, 0, 0, 7); g.fill();
+  g.lineJoin = 'round'; g.lineCap = 'round'; g.strokeStyle = INK;
+  // 剑（在头后面挥）
+  g.save(); g.translate(96, -60); g.rotate(-剑角);
+  g.lineWidth = 22; g.beginPath(); g.moveTo(0, 0); g.lineTo(54, -90); g.stroke();
+  g.lineWidth = 10; g.strokeStyle = '#e8f4ff'; g.stroke(); g.restore();
+  g.strokeStyle = INK;
+  g.beginPath(); g.arc(0, -80, 78, 0, 7); g.fillStyle = 疼 && a < 0.05 ? '#fff' : '#ffe0b8'; g.fill(); g.lineWidth = 7; g.stroke();
+  g.beginPath(); g.moveTo(-78, -110); g.quadraticCurveTo(0, -190, 78, -110); g.lineTo(78, -96); g.lineTo(-78, -96); g.closePath(); g.fillStyle = '#5ab8ff'; g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(70, -104); g.lineTo(118, -128 + Math.sin(时 * 9) * 5); g.lineTo(108, -92); g.closePath(); g.fill(); g.lineWidth = 6; g.stroke();
+  if (疼) { g.lineWidth = 6; g.beginPath(); g.moveTo(-40, -82); g.lineTo(-24, -72); g.lineTo(-40, -62); g.moveTo(40, -82); g.lineTo(24, -72); g.lineTo(40, -62); g.stroke(); }
+  else { g.fillStyle = INK; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * 28, -72, 9, 13, 0, 0, 7); g.fill(); } }
+  g.fillStyle = 'rgba(255,143,184,.7)'; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * 50, -48, 12, 7, 0, 0, 7); g.fill(); }
+  g.restore();
+}
+// 史莱姆：挨打时压扁、闪白、眼睛变 > <
+function 画史莱姆() {
+  const r = 82, a = 时 - 桩.闪, 疼 = a < 0.22, 呼 = Math.sin(时 * 4) * 0.03;
+  const k = Math.exp(-a * 14) * (桩.暴 ? 0.34 : 0.2), sx = 1 + k * 0.7 + 呼, sy = 1 - k * 0.5 - 呼;
+  g.fillStyle = 'rgba(74,31,92,.18)'; g.beginPath(); g.ellipse(桩.x, 桩.y + 6, r * 1.1, r * 0.18, 0, 0, 7); g.fill();
+  g.save(); g.translate(桩.x, 桩.y); g.scale(sx, sy);
+  const 渐 = g.createRadialGradient(-r * 0.2, -r * 1.1, 0, -r * 0.2, -r * 1.1, r * 1.6);
+  渐.addColorStop(0, '#ffe3f1'); 渐.addColorStop(0.55, '#ff9ccb'); 渐.addColorStop(1, '#f2609f');
+  g.beginPath(); g.moveTo(-r, 0); g.bezierCurveTo(-r * 1.05, -r * 1.15, -r * 0.55, -r * 1.55, 0, -r * 1.55); g.bezierCurveTo(r * 0.55, -r * 1.55, r * 1.05, -r * 1.15, r, 0); g.closePath();
+  g.fillStyle = a < 0.04 ? '#fff' : 渐; g.fill(); g.strokeStyle = INK; g.lineWidth = r * 0.07; g.lineJoin = 'round'; g.stroke();
+  g.save(); g.translate(-r * 0.38, -r * 1.12); g.rotate(-25 * Math.PI / 180); g.fillStyle = 'rgba(255,255,255,.75)'; g.beginPath(); g.ellipse(0, 0, r * 0.22, r * 0.12, 0, 0, 7); g.fill(); g.restore();
+  g.lineCap = 'round';
+  if (疼) { g.lineWidth = r * 0.06; g.beginPath(); for (const s of [-1, 1]) { g.moveTo(s * r * 0.48, -r * 0.82); g.lineTo(s * r * 0.3, -r * 0.72); g.lineTo(s * r * 0.48, -r * 0.62); } g.stroke(); }
+  else for (const s of [-1, 1]) { g.fillStyle = INK; g.beginPath(); g.ellipse(s * r * 0.36, -r * 0.74, r * 0.11, r * 0.15, 0, 0, 7); g.fill(); g.fillStyle = '#fff'; g.beginPath(); g.arc(s * r * 0.36 + r * 0.035, -r * 0.8, r * 0.04, 0, 7); g.fill(); }
+  g.fillStyle = 'rgba(255,143,184,.9)'; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * r * 0.6, -r * 0.5, r * 0.12, r * 0.07, 0, 0, 7); g.fill(); }
+  g.restore();
+}
+// 打中时的四角小星星
+function 画星(s) {
+  const a = (时 - s.t) / 0.35, R = 22 * s.大 * (a < 0.3 ? a / 0.3 : 1 - (a - 0.3) * 0.6);
+  g.save(); g.translate(s.x, s.y); g.rotate(a * 1.5); g.globalAlpha = 1 - a * a;
+  g.beginPath(); for (let i = 0; i < 8; i++) { const ang = i * Math.PI / 4, rr = i % 2 ? R * 0.3 : R; g.lineTo(Math.cos(ang) * rr, Math.sin(ang) * rr); } g.closePath();
+  g.fillStyle = '#ffe14a'; g.fill(); g.strokeStyle = INK; g.lineWidth = 3; g.stroke(); g.restore(); g.globalAlpha = 1;
+}
+// 图例小胶囊（颜色开着时才有意义）
+function 胶囊(x, y, 色, 文) {
+  g.font = `900 14px system-ui,'Microsoft YaHei',sans-serif`; const w = g.measureText(文).width + 38;
+  g.fillStyle = '#fff'; 圆角(x, y, w, 26, 13); g.fill(); g.strokeStyle = INK; g.lineWidth = 3; g.stroke();
+  g.fillStyle = 色; g.beginPath(); g.arc(x + 15, y + 13, 6.5, 0, 7); g.fill(); g.lineWidth = 2; g.stroke();
+  g.fillStyle = INK; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(文, x + 27, y + 14); return w;
+}
+
+function 画() {
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  画背景();
+  画勇者(); 画史莱姆();
+  for (const s of 星们) if (时 >= s.t) 画星(s);
+  g.font = `900 15px system-ui,'Microsoft YaHei',sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = INK;
+  g.fillText('小勇者（你）', 英雄.x, 地 + 32); g.fillText('史莱姆', 桩.x, 地 + 32);
+  if (on.color) {
+    let x = 20;
+    x += 胶囊(x, 16, on.rows ? 参数.颜色.冒险岛打怪[1] : '#ffffff', '你打怪') + 8;
+    x += 胶囊(x, 16, on.rows ? 参数.颜色.冒险岛暴击[1] : 参数.颜色.暴击[1], '暴击：换色 + 标记') + 8;
+    x += 胶囊(x, 16, on.hurt ? 参数.颜色.挨打[1] : '#ff4d5e', '你挨打') + 8;
+    胶囊(x, 16, 参数.颜色.治疗[1], '治疗');
+  }
+
+  // 画顺序：主次开着时，普通的先画（在下面），暴击后画（压在最上面）
+  const 列 = [...字们].filter(z => 时 >= z.t).sort((a, b) => on.rank ? (a.种 === '暴击') - (b.种 === '暴击') : 0);
+  for (const z of 列) 画字(z);
+
+  if (大字) {
+    const a = (时 - 大字.t) / 0.9, s = a < 0.15 ? 0.5 + a / 0.15 * 0.8 : 1.3 - (a - 0.15) * 0.3;
+    g.globalAlpha = a > 0.7 ? (1 - a) / 0.3 : 1;
+    g.save(); g.translate(W / 2, H * 0.42); g.rotate(-0.08);
+    糖字('BREAK', 0, 0, Math.round(100 * s), 参数.颜色.冒险岛暴击);
+    g.restore(); g.globalAlpha = 1;
+  }
+}
+
+function 画字(z) {
+  const age = 时 - z.t, a = age / 参数.一生;
+  const 自己打的 = z.目标 === 桩;
+  // 文字和颜色
+  let 文 = z.种 === '未命中' ? (on.color || on.words ? '未命中' : 'MISS') : (z.种 === '治疗' ? '+' : '') + 写(z.v);
+  let 色 = 参数.颜色.普通, 大 = 1, 抖 = 0;
+  if (on.color) {
+    色 = 参数.颜色[z.种 === '挨打' ? '暴击' : z.种];
+    if (z.种 === '挨打') 色 = ['#ffe0e0', '#ff4d5e'];
+    if (z.种 === '暴击') { 大 = 1.45; 抖 = 3; }
+    if (z.种 === '未命中') 大 = 0.8;
+  }
+  let 标记 = false;
+  if (on.rows && z.行 !== undefined) { 大 = 1; 抖 = 0; if (on.color) 色 = z.种 === '暴击' ? 参数.颜色.冒险岛暴击 : 参数.颜色.冒险岛打怪; if (z.种 === '暴击') 标记 = true; }
+  if (on.hurt && z.种 === '挨打') { 色 = 参数.颜色.挨打; 大 *= 1.3; 抖 = age < 0.25 ? 4 : 0; }
+  if (on.sides && on.color && 自己打的 && z.种 === '普通') 色 = 参数.颜色.冒险岛打怪;
+  // 大小跟伤害
+  if (z.种 !== '未命中' && z.种 !== '治疗') {
+    if (on.self) 大 *= Math.min(参数.最大倍, Math.max(参数.最小倍, 1 + 0.5 * Math.log10(Math.max(1e-6, z.相对))));
+    else if (on.digits) 大 *= Math.min(参数.最大倍, Math.max(参数.最小倍, 1 + 参数.每位放大 * (String(Math.round(z.v)).length - 1)));
+    if (on.self || on.digits) 大 = Math.min(大, 参数.最大倍);   /* 暴击再放大也不超过普通字的 2 倍 */
+  }
+  // 换成文字：按「这一下 ÷ 平时」分五档，越疼越大越红
+  if (on.words && 自己打的 && z.种 !== '未命中') {
+    const 档 = 参数.五档.findIndex(([, 上]) => z.相对 < 上);
+    文 = 参数.五档[档][0]; 大 = 0.8 + 档 * 0.28; 色 = 参数.五档色[档];
+    文 = 文.slice(0, Math.min(文.length, Math.floor(age / 参数.一字一拍) + 1));
+  }
+  // 弹出：先压扁再弹高、冲过头再回来
+  let 弹 = 1, 扁 = 1;
+  if (on.pop) {
+    const p = Math.min(1, age / 参数.弹出时长); 弹 = p < 1 ? 0.5 + (参数.弹出过冲 - 0.5) * Math.sin(p * Math.PI / 2) : 1;
+    if (age > 参数.弹出时长 && age < 参数.弹出时长 * 2) 弹 = 参数.弹出过冲 - (参数.弹出过冲 - 1) * (age / 参数.弹出时长 - 1);
+    扁 = age < 0.1 ? 1 + 0.3 * (1 - age / 0.1) : 1;
+  }
+  if (z.合 && on.pop) 弹 *= 1 + 0.15 * Math.max(0, 1 - age / 0.1);
+  const 淡 = a > 0.65 ? Math.max(0, 1 - (a - 0.65) / 0.35) : 1;
+  const 缩 = a > 0.65 ? 1 - (a - 0.65) * 0.6 : 1;
+  // 位置
+  let x = z.x, y = z.y;
+  if (z.vx === undefined) {
+    if (on.rows && z.行 !== undefined) y = z.y + 50 - z.行 * 参数.基础字号 * 参数.行距 - age * 20;
+    else y = z.y - 参数.上飘 * (1 - (1 - Math.min(1, a)) ** 2);
+  }
+  if (z.种 === '治疗' || z.种 === '挨打') x = z.vx === undefined ? z.x + 40 : x;
+  // 主次：普通的小、半透明
+  let 透 = 1;
+  if (on.rank && z.种 === '普通') { 大 *= 0.8; 透 = 0.55; }
+  const 号 = Math.round(参数.基础字号 * 大);
+  g.globalAlpha = 淡 * 透;
+  const sx = (Math.random() - 0.5) * 抖 * 2;
+  g.save(); g.translate(x + sx, y); g.scale(弹 * 缩 * 扁, 弹 * 缩 / 扁);
+  糖字(文, 0, 0, 号, 色, on.fat);
+  const w = 宽(文, 号, on.fat);
+  if (标记) { g.save(); g.translate(-w / 2 - 号 * 0.62, -号 * 0.05); g.rotate(-0.21); 糖字('暴击', 0, 0, Math.round(号 * 0.48), ['#fff7c9', '#ffaa10'], on.fat); g.restore(); }
+  if (on.rows && z.行 !== undefined) { g.fillStyle = '#ff2f78'; g.font = `900 ${Math.round(号 * 0.7)}px system-ui,sans-serif`; g.textAlign = 'left'; g.fillText('♪', w / 2 + 6, -Math.sin(age * 12) * 4); }
+  if (on.tags && z.弱 && 自己打的) { g.save(); g.translate(w / 2 + 号 * 0.9, -号 * 0.6); g.rotate(0.15); 糖字('WEAK', 0, 0, Math.round(号 * 0.5), ['#fffbe0', '#f5b800'], on.fat); g.restore(); }
+  g.restore();
+  g.globalAlpha = 1;
+}
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

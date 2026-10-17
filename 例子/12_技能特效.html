@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>12 技能特效 · 小例子</title>
+<style>
+:root{--bg:#0e0d13;--panel:#17161e;--line:#2b2936;--txt:#ece9f3;--dim:#9b97a8;--acc:#ffc84a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,sans-serif;padding:12px;max-width:1080px;margin:auto}
+h1{font-size:18px;margin:4px 0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tabs button{flex:1;min-width:120px}
+button{background:#262432;color:var(--txt);border:1px solid #3a3748;border-radius:6px;padding:5px 9px;cursor:pointer;font-size:13px}
+button:hover,button.on{border-color:var(--acc)}button.on{background:#3a3320}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+canvas{width:100%;display:block;border-radius:10px;background:#000;aspect-ratio:16/9}
+.out{background:#100f16;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0}
+.dim{color:var(--dim);font-size:12px}
+input[type=range]{flex:1;min-width:160px}
+label{display:inline-flex;gap:4px;align-items:center;cursor:pointer;font-size:13px;background:#1d1b25;border-radius:6px;padding:3px 7px}
+#lays{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<h1>12 技能特效：十几招公式，搭出所有技能</h1>
+<div class="tabs"><button data-t="A" class="on">A 十招 + 五个积木（每招现场演示）</button><button data-t="B">B 一个火球：12 层 × 5 种画风</button></div>
+<canvas id="c" width="960" height="540"></canvas>
+
+<div id="pA">
+  <div class="row" id="moves"></div>
+  <div class="row"><span id="pName" style="min-width:150px"></span><input type="range" id="pVal" min="0" max="1" step="0.001" value="0.5"><label><input type="checkbox" id="pAuto"> 自动来回</label></div>
+  <div class="out" id="pNote"></div>
+</div>
+
+<div id="pB" class="hide">
+  <div class="row" id="styles"></div>
+  <div class="row"><button id="bPlay">暂停</button><span class="dim">时间</span><input type="range" id="bT" min="0" max="3.2" step="0.01" value="0"><span id="bPhase" style="min-width:90px"></span></div>
+  <div class="row"><button id="bAll">全开</button><button id="bCore">只留第一层</button><button id="bBuild">一层一层加上去</button></div>
+  <div id="lays"></div>
+  <div class="out" id="bNote"></div>
+</div>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 R; uniform float T, M, P, TAB, STY, FT, L[12];
+#define PI 3.14159265
+float h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float h11(float n){return fract(sin(n*91.345)*43758.5453);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
+  return mix(mix(h21(i),h21(i+vec2(1,0)),u.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),u.x),u.y);}
+float fbm(vec2 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*vn(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return s/.97;}
+vec3 fireCol(float h){h=clamp(h,0.,1.);vec3 c=mix(vec3(0),vec3(.65,.05,0),smoothstep(0.,.25,h));
+  c=mix(c,vec3(1,.42,0),smoothstep(.25,.5,h));c=mix(c,vec3(1,.85,.25),smoothstep(.5,.75,h));return mix(c,vec3(1,1,.92),smoothstep(.75,1.,h));}
+float fireHeat(vec2 p, float t){   
+  vec2 q=p-vec2(0,-.42);
+  float n=fbm(vec2(q.x*5.,q.y*4.-t*2.2));
+  float w=.24*(1.-q.y*1.25);
+  float m=clamp(1.-abs(q.x)/max(w,.001),0.,1.)*clamp(1.-q.y*1.35,0.,1.)*step(0.,q.y+.02);
+  return clamp(n*m*1.9-q.y*.6,0.,1.2);}
+float smin(float a,float b,float k){float h=max(k-abs(a-b),0.)/max(k,.0001);return min(a,b)-h*h*k*.25;}
+float checker(vec2 p){vec2 g=floor(p*12.);return mod(g.x+g.y,2.);}
+vec3 runeBand(float u,float v){   
+  float c=floor(u*28.), f=fract(u*28.); float k=h11(c);
+  float g=0.;
+  if(k>.25) g=max(g,1.-smoothstep(.0,.08,abs(f-.5)));
+  if(fract(k*7.)>.4) g=max(g,(1.-smoothstep(0.,.08,abs(v-.5)))*step(.2,f)*step(f,.8));
+  if(fract(k*13.)>.5) g=max(g,1.-smoothstep(0.,.08,abs((f-.2)-(v-.2)*.8)));
+  g*=step(.15,v)*step(v,.85);
+  float edge=1.-smoothstep(0.,.06,min(v,1.-v));
+  return vec3(1.,.75,.3)*max(g,edge);}
+
+
+vec3 effectA(vec2 p){
+  float t=T; int m=int(M+.5);
+  if(m==0){ 
+    int s=int(P*5.99); vec3 c;
+    if(s==0) c=vec3(h21(floor(p*40.)));
+    else if(s==1) c=vec3(vn(p*8.));
+    else if(s==2) c=vec3(fbm(p*4.));
+    else if(s==3) c=vec3(fbm(vec2(p.x*5.,p.y*4.-t*2.2)));
+    else if(s==4) c=vec3(fireHeat(p,t));
+    else { float h=fireHeat(p,t); c=fireCol(h*1.15); for(int i=0;i<14;i++){float fi=float(i);float a=fract(t*.5+h11(fi));
+      vec2 sp=vec2((h11(fi*3.1)-.5)*.3+sin(a*9.+fi)*.03,-.35+a*.8); c+=vec3(1,.5,.1)*.00012/(dot(p-sp,p-sp)+.00004)*(1.-a);} }
+    return c;}
+  if(m==1){ 
+    vec2 v=vec2(1,0); float a2=.17*.17*1.25; float r2=dot(p,p);
+    if(P>.5) v=vec2(1.-a2*(p.x*p.x-p.y*p.y)/(r2*r2),-2.*a2*p.x*p.y/(r2*r2));
+    v=clamp(v,-2.,2.);
+    float t1=fract(t*.4),t2=fract(t*.4+.5),w=abs(2.*t1-1.);
+    float n=mix(fbm((p-v*t1*.5)*vec2(5,9)),fbm((p-v*t2*.5)*vec2(5,9)+3.7),w);
+    vec3 c=mix(vec3(.03,.16,.35),vec3(.35,.75,1.),pow(n,2.2)*1.8); c+=vec3(.9)*smoothstep(.72,.8,n);
+    float rk=length(p)-.15; if(rk<0.) c=mix(vec3(.32,.3,.28),vec3(.5,.47,.42),vn(p*30.))*(1.-smoothstep(-.03,0.,rk)*.4);
+    return c;}
+  if(m==2){ 
+    vec3 bg=mix(vec3(.08,.07,.12),vec3(.16,.12,.2),p.y+.5);
+    vec2 q=p; float box=max(abs(q.x),abs(q.y))-.24; if(box>0.) return bg;
+    vec3 wood=mix(vec3(.45,.27,.12),vec3(.62,.4,.2),vn(vec2(q.x*4.,q.y*40.)));
+    wood*=.75+.25*step(.02,abs(fract(q.y*6.)-.5)*2.);
+    if(abs(abs(q.x)-abs(q.y))<.025) wood*=.6;
+    float n=fbm(q*6.), th=P*1.08-.04, e=n-th;
+    if(e<0.) return bg;
+    return mix(wood,vec3(1.,.55,.1)*2.,1.-smoothstep(0.,.05,e));}
+  if(m==3){ 
+    vec3 c=vec3(.03,.04,.08)+.04*checker(p*.5);
+    vec2 q=p-vec2(0,-.02); float rad=.33, r=length(q)/rad;
+    if(r>=1.) return c;
+    float nz=sqrt(1.-r*r), pw=.5+P*5., fr=pow(1.-nz,pw);
+    vec2 hp=q/rad/(nz*.6+.4)*5.; vec2 hx=vec2(hp.x+hp.y*.577,hp.y*1.155);
+    vec2 cell=fract(hx)-.5; float hexl=smoothstep(.42,.5,max(abs(cell.x),abs(cell.y)));
+    float tt=fract(t*.6); vec2 hit=vec2(.16,.1); float ring=exp(-pow((length(q-hit)-tt*.45)*35.,2.))*(1.-tt);
+    float hot=exp(-length(q-hit)*30.)*(1.-tt)*step(tt,.3);
+    return c+vec3(.25,.75,1.)*(fr*1.3+hexl*.35*(fr+.15)+ring*1.2+hot*2.+.04);}
+  if(m==4){ 
+    vec2 q=p; float mask=smoothstep(.35,0.,abs(p.x))*smoothstep(-.45,-.25,p.y)*smoothstep(.5,.1,p.y);
+    q+=(vec2(fbm(p*9.+vec2(0,-t*3.)),fbm(p*9.+vec2(5.,-t*3.)))-.5)*P*.09*mask;
+    vec3 c=mix(vec3(.85,.85,.8),vec3(.15,.2,.3),checker(q*.8));
+    float h=fireHeat(p,t); return mix(c,fireCol(h*1.15),smoothstep(0.,.15,h));}
+  if(m==5){ 
+    vec3 col[3]; col[0]=vec3(1,.15,.1); col[1]=vec3(.1,1,.25); col[2]=vec3(.15,.3,1);
+    vec3 c=vec3(.02); bool add=P>.5;
+    for(int i=0;i<3;i++){float fi=float(i); vec2 o=vec2(cos(t*.7+fi*2.094),sin(t*.7+fi*2.094))*.11; float d=length(p-o)-.15;
+      if(add) c+=col[i]*(smoothstep(.01,0.,d)*.9+.05/(1.+max(d,0.)*60.)*2.);
+      else if(d<0.) c=col[i]*.8;}
+    for(int i=0;i<6;i++){float fi=float(i);float y=-.38+fi*.008; float d=abs(p.y-y-.02*sin(p.x*8.+t*2.+fi));
+      if(add) c+=vec3(.9,.2,1.)*.0025/(d+.002); else if(d<.002) c=vec3(.9,.2,1.)*.8;}
+    return add?vec3(1.)-exp(-c*1.4):c;}
+  if(m==6){ 
+    vec3 c=mix(vec3(.55,.75,.95),vec3(.95,.85,.6),smoothstep(.5,-.2,p.y));
+    float y0=-.42; if(p.y<y0) return vec3(.25,.35,.12);
+    for(int row=0;row<3;row++){float fr=float(row); float N=70.+fr*30.; float sx=p.x*N+fr*.37;
+      for(int j=-1;j<=1;j++){float k=floor(sx)+float(j); float bx=(k+.5+(h11(k+fr*50.)-.5)*.6)/N-fr*.37/N;
+        float hgt=.22+.18*h11(k*1.7+fr)-fr*.04; float ty=(p.y-y0)/hgt; if(ty<0.||ty>1.) continue;
+        float wave=sin(bx*7.-t*2.6)*.5+.5; float bend=(wave*.09+.015*sin(t*7.+k))*P;
+        float xb=bx+bend*ty*ty; float wd=.0045*(1.-ty)*(1.+fr*.3);
+        if(abs(p.x-xb)<wd) c=mix(vec3(.12,.32,.05),vec3(.55,.8,.2),ty)*(.7+.45*wave*P)*(.75+fr*.12);}}
+    return c;}
+  if(m==7){ 
+    vec3 c=vec3(.93,.9,.85); vec3 Lt=normalize(vec3(cos(t*.6),.6,.8));
+    for(int s=0;s<2;s++){vec2 q=p-vec2(s==0?-.38:.38,0.); float r=length(q)/.27; if(r>=1.) continue;
+      vec3 n=vec3(q/.27,sqrt(1.-r*r)); float df=max(dot(n,Lt),0.); float sp=pow(max(dot(reflect(-Lt,n),vec3(0,0,1)),0.),24.);
+      vec3 base=vec3(.95,.45,.35);
+      if(s==0) c=base*(.18+.82*df)+sp*.6;
+      else{ float st=2.+floor(P*4.); float q2=floor(df*st+.5)/st; c=base*(.3+.7*q2)+step(.5,sp)*.7; if(r>.93) c=vec3(.12,.08,.1);} }
+    return c;}
+  if(m==8){ 
+    vec3 c=vec3(.03,.02,.07);
+    if(P<.33){ float v=(p.y+.05)/.1; if(v>0.&&v<1.) c+=runeBand(p.x*.5+t*.05,v); return c;}
+    float a=atan(p.y,p.x)/(2.*PI)+.5, r=length(p);
+    float v=(r-.27)/.07; if(v>0.&&v<1.) c+=runeBand(a+t*.03,v);
+    c+=vec3(1,.75,.3)*(1.-smoothstep(0.,.004,abs(r-.38)))*.9;
+    float tk=step(.85,fract(a*48.-t*.5))*step(.345,r)*step(r,.375); c+=vec3(1,.75,.3)*tk*.8;
+    if(P>.66&&r<.25){ float tw=a*2.*PI+1.2/(r+.06)-t*2.; float n=fbm(vec2(cos(tw),sin(tw))*1.5+vec2(log(r+.01)*2.-t,0.));
+      c+=mix(vec3(.4,.1,.8),vec3(.6,.9,1.),n)*n*1.6*smoothstep(.25,.08,r);}
+    return c;}
+  if(m==9){ 
+    vec2 a=vec2(-.2+.12*sin(t),.0), b=vec2(.2-.12*sin(t),.05*cos(t*1.3));
+    float d=smin(length(p-a)-.13,length(p-b)-.11,P*.35);
+    vec3 c=vec3(.02,.02,.05)+vec3(.06,.08,.15)*(.5+.5*cos(d*120.))*exp(-abs(d)*6.);
+    c+=vec3(.2,.9,1.)*.004/(abs(d)+.004); if(d<0.) c+=vec3(.05,.2,.3);
+    return c;}
+  if(m==10){ 
+    vec2 g=p*7.; vec2 i=floor(g); float f1=9.,f2=9.; float id=0.;
+    for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){vec2 o=vec2(x,y); vec2 h=vec2(h21(i+o),h21(i+o+19.));
+      vec2 pt=o+.5+.4*sin(t*.8+6.28*h); float d=length(i+pt-g); if(d<f1){f2=f1;f1=d;id=h.x;}else if(d<f2)f2=d;}
+    float e=f2-f1;
+    if(P<.33) return .5+.5*cos(6.28*(id+vec3(0,.33,.67)))*.8;
+    if(P<.66) return mix(vec3(.75,.88,1.),vec3(.2,.35,.6),smoothstep(0.,.08,e))+vec3(1.)*(1.-smoothstep(0.,.03,e))*.6;
+    return vec3(.02,.25,.4)+vec3(.6,.95,1.)*pow(1.-smoothstep(0.,.25,e),3.);}
+  if(m==11){ 
+    float tt=P*1.6; vec3 c=vec3(.03,.02,.04); if(p.y<-.35) c=vec3(.08,.06,.05);
+    for(int i=0;i<90;i++){float fi=float(i); float an=PI*(.15+.7*h11(fi)); float sp=.35+.7*h11(fi*2.3);
+      vec2 v=vec2(cos(an),sin(an))*sp; vec2 pos=vec2(0,-.2)+v*tt+.5*vec2(0,-1.3)*tt*tt;
+      float life=.8+.8*h11(fi*5.1); float fd=clamp(1.-tt/life,0.,1.); if(pos.y<-.35) fd*=.2;
+      c+=mix(vec3(1,.3,.05),vec3(1,.9,.6),fd)*.00008/(dot(p-pos,p-pos)+.00002)*fd;}
+    return c;}
+  
+  vec3 ro=vec3(0,.7,-7.5), rd=normalize(vec3(p.x,p.y-.16,1.9)); vec3 pos=ro, vel=rd; vec3 c=vec3(0); float G=P*.3; bool eat=false;
+  for(int i=0;i<170;i++){ float r=length(pos); if(r<.32){eat=true;break;}
+    float dt=clamp(r*.04,.02,.12); vec3 np=pos+vel*dt; vel-=G*pos/(r*r*r)*dt; vel=normalize(vel);
+    if(pos.y*np.y<0.){ float k=pos.y/(pos.y-np.y); vec3 x=mix(pos,np,k); float rr=length(x.xz);
+      if(rr>.55&&rr<1.7){ float dop=1.+.55*x.x/rr; float ring=fbm(vec2(atan(x.z,x.x)*3.+T*.6,rr*8.));
+        c+=mix(vec3(1.,.35,.05),vec3(1.,.9,.6),ring)*(1.-smoothstep(.55,1.7,rr))*dop*(.6+.6*ring)*.9;}}
+    pos=np; if(r>12.&&dot(pos,vel)>0.) break;}
+  if(!eat){ vec2 sph=vec2(atan(vel.z,vel.x),asin(clamp(vel.y,-1.,1.)));
+    float s=h21(floor(sph*160.)); c+=vec3(.9,.95,1.)*step(.992,s)*(.4+.6*h21(floor(sph*160.)+3.));
+    vec2 gr=abs(fract(sph*vec2(4.,4.)/PI*2.)-.5); c+=vec3(.15,.2,.45)*(1.-smoothstep(0.,.03,min(gr.x,gr.y)))*.6;}
+  return c;}
+
+
+vec2 ballPos(float t){ if(t<.9) return vec2(-.52,-.12); float k=clamp((t-.9)/.7,0.,1.); return vec2(mix(-.52,.56,k),-.12+.08*sin(k*PI));}
+vec3 bgB(vec2 p,float s){
+  if(s>3.5) return vec3(0.)+vec3(.15,0.,.3)*(1.-smoothstep(0.,.006,abs(fract(p.x*6.)-.5)*step(p.y,-.3)/6.))*step(p.y,-.3);
+  if(s>1.5&&s<2.5){ return vec3(.93,.89,.8)-.06*fbm(p*40.)-(p.y<-.3?.05:0.); }
+  vec3 c=mix(vec3(.05,.05,.12),vec3(.22,.12,.25),smoothstep(.5,-.3,p.y));
+  if(p.y<-.3) c=mix(vec3(.12,.1,.09),vec3(.2,.17,.14),vn(p*vec2(20,60)));
+  if(s>.5&&s<1.5) c=p.y<-.3?vec3(.3,.24,.2):mix(vec3(.15,.12,.3),vec3(.35,.2,.4),step(0.,p.y));
+  return c;}
+void fireData(vec2 p, float t, out float H, out float S, out float W, out float G, out float SC, out float GL, out float FL, out float ED){
+  H=0.;S=0.;W=0.;G=0.;SC=0.;GL=0.;FL=0.;ED=0.;
+  vec2 b=ballPos(t); float e=t-1.6; vec2 hit=vec2(.56,-.12);
+  bool fly=t<1.6;
+  if(fly){ float r=t<.9?mix(.015,.06,t/.9):.06; vec2 q=p-b; float d=length(q);
+    if(L[1]>.5) d+=(fbm(q*16.+vec2(0,-t*5.))-.5)*.05+(q.x<0.&&t>.9?max(0.,-q.x)*.0:0.);
+    if(L[0]>.5) H=max(H,1.-d*d/(r*r));
+    if(L[2]>.5&&t<.9) for(int i=0;i<24;i++){float fi=float(i); float ph=fract(t*1.3+h11(fi)); float a=fi*.262+t*4.;
+      vec2 sp=b+vec2(cos(a),sin(a))*.3*(1.-ph); H+=.35*smoothstep(.012,0.,length(p-sp))*ph;}
+    if(L[4]>.5&&t>.9) for(int i=1;i<15;i++){float fi=float(i); vec2 pb=ballPos(t-fi*.025); float rr=.06*(1.-fi/16.);
+      float dd=length(p-pb); if(L[1]>.5) dd+=(fbm((p-pb)*16.+fi)-.5)*.04; H=max(H,(1.-dd*dd/(rr*rr))*(1.-fi/15.)*.9);}
+  }
+  if(L[3]>.5){ float on=clamp(1.-max(0.,t-1.)*1.5,0.,1.)*smoothstep(0.,.3,t); vec2 q=(p-vec2(-.52,-.31))*vec2(1.,3.4);
+    float a=atan(q.y,q.x)/(2.*PI)+.5, r=length(q); float v=(r-.17)/.05;
+    if(v>0.&&v<1.) G+=runeBand(a-t*.08,v).r*on; G+=(1.-smoothstep(0.,.006,abs(r-.25)))*on;}
+  if(e>=0.){
+    float cool=exp(-e*1.8);
+    if(L[5]>.5){ float rad=.22*(1.-exp(-e*9.)); float d=length(p-hit); float n=fbm((p-hit)*9.+vec2(0,-e*3.));
+      H=max(H,clamp((1.-d/max(rad,.001))+(n-.5)*.6,0.,1.)*cool*1.3);}
+    if(L[6]>.5){ float rr=e*.75, th=.025*(1.-e/1.4); float d=abs(length((p-hit)*vec2(1.,1.15))-rr); W=max(W,(1.-smoothstep(0.,max(th,.001),d))*clamp(1.-e/1.4,0.,1.));}
+    if(L[7]>.5) for(int i=0;i<30;i++){float fi=float(i); float an=PI*(.05+.9*h11(fi*1.3)); float sp=.4+.7*h11(fi*2.7);
+      vec2 pos=hit+vec2(cos(an)*(h11(fi*4.)>.5?1.:-1.)*.9,sin(an))*sp*e+.5*vec2(0,-1.4)*e*e;
+      float fd=clamp(1.-e/(.6+.6*h11(fi*8.)),0.,1.); H=max(H,smoothstep(.009,0.,length(p-pos))*fd);}
+    if(L[8]>.5){ vec2 c=hit+vec2(0,e*.16); float rad=.12+e*.13; float d=length(p-c)/rad; float n=fbm((p-c)*7.+vec2(0,-e));
+      float th=smoothstep(.3,1.6,e); float den=(1.-smoothstep(.5,1.,d))*smoothstep(.15,.4,e);
+      float k=n-th; if(k>0.) S=max(S,den*smoothstep(0.,.15,k)); ED=max(ED,den*(1.-smoothstep(0.,.04,abs(k)))*step(.1,th));}
+    if(L[9]>.5) for(int i=0;i<16;i++){float fi=float(i); float a=fract(e*.5+h11(fi)); vec2 pos=hit+vec2((h11(fi*3.)-.5)*.3+sin(a*8.+fi)*.03,a*.5);
+      H=max(H,smoothstep(.006,0.,length(p-pos))*(1.-a)*smoothstep(.1,.3,e));}
+    if(L[10]>.5){ vec2 q=(p-vec2(.56,-.32))*vec2(1.,4.); SC=(1.-smoothstep(.12,.2,length(q)+(fbm(p*30.)-.5)*.08))*smoothstep(0.,.2,e);}
+    if(L[11]>.5) FL=clamp(1.-e/.08,0.,1.)*step(0.,e);
+  }
+  if(L[11]>.5){ vec2 src=fly?b:hit; float pw=fly?(t<.9?t/.9:1.)*.5:exp(-e*1.5)*1.4; GL=pw*exp(-length((p-src)*vec2(1.,2.5))*5.)*step(p.y,-.3);}
+}
+vec3 fireB(vec2 p){
+  float s=STY, t=FT;
+  if(s>2.5&&s<3.5){ vec2 px=floor(gl_FragCoord.xy/6.)*6.+3.; p=(px-.5*R)/R.y;}
+  p*=.88; p.y-=.04;
+  float H,S,W,G,SC,GL,FL,ED; fireData(p,t,H,S,W,G,SC,GL,FL,ED);
+  float e=t-1.6; vec2 hit=vec2(.56,-.12);
+  vec2 bp=p; if(s<.5) bp+=normalize(p-hit+.0001)*W*.03;
+  vec3 c=bgB(bp,s);
+  
+  float shake=L[11]>.5&&e>0.?sin(e*60.)*.012*exp(-e*5.):0.;
+  bool man=abs(p.x+.64)<.035&&p.y>-.3&&p.y<-.08; bool stake=abs(p.x-.62-shake)<.03&&p.y>-.3&&p.y<-.02;
+  vec3 ink=s>1.5&&s<2.5?vec3(.15):s>3.5?vec3(0):vec3(.05,.04,.06);
+  if(man) c=s>3.5?vec3(0):ink; if(stake) c=s>3.5?vec3(0):(s>1.5&&s<2.5?vec3(.3,.25,.2):vec3(.4,.26,.14));
+  if(s>3.5&&(man||stake)) c+=vec3(.2,.9,1.)*.0;
+  if(s<.5){ 
+    c*=1.-SC*.75; c+=vec3(1.,.5,.15)*GL; c=mix(c,vec3(.25,.23,.24),S*.85); c+=vec3(1.,.45,.1)*ED*1.5;
+    c+=vec3(1.,.7,.4)*G*.9; c+=fireCol(H*1.1); c+=vec3(.6)*W*.25; c=mix(c,vec3(1.),FL*.8);}
+  else if(s<1.5){ 
+    c*=1.-SC*.6; c+=vec3(.5,.25,.1)*step(.25,GL);
+    if(S>.3) c=vec3(.45,.4,.5); if(ED>.4) c=vec3(1.,.6,.2);
+    if(G>.5) c=vec3(1.,.85,.4);
+    if(H>.12) c=H>.7?vec3(1.,1.,.85):H>.4?vec3(1.,.75,.2):vec3(1.,.35,.1);
+    if(abs(H-.12)<.02) c=vec3(.25,.08,.05);
+    if(W>.3) c=vec3(1.);
+    if(e>0.&&e<.1) c=vec3(1.)-c;}
+  else if(s<2.5){ 
+    float ink2=smoothstep(.04,.18,H)*(1.-smoothstep(.25,.75,H)*.65);
+    c=mix(c,vec3(.12,.11,.1),ink2*.95); c=mix(c,vec3(.75,.12,.08),smoothstep(.75,.95,H));
+    c=mix(c,vec3(.45,.44,.42),S*.55*(.7+.3*fbm(p*25.))); c=mix(c,vec3(.15),W*.6+G*.7+ED*.5); c=mix(c,vec3(.25),SC*.5);}
+  else if(s<3.5){ 
+    c*=1.-SC*.75; c+=vec3(1.,.5,.15)*GL; c=mix(c,vec3(.3),S*.8); c+=vec3(1.,.45,.1)*ED; c+=vec3(1.,.7,.4)*G; c+=fireCol(H*1.1); c+=W*.4; c=mix(c,vec3(1.),FL*.8);
+    vec2 b=floor(gl_FragCoord.xy/6.); float by=mod(b.x,2.)*2.+mod(b.y,2.); float bayer=(mod(b.x+b.y*2.,4.)+.5)/4.;
+    c=floor(clamp(c,0.,1.)*3.+bayer)/3.;}
+  else { 
+    float g=0.; for(int i=1;i<4;i++){float l=float(i)*.22; g+=.006/(abs(H-l)+.006);}
+    c+=vec3(1.,.3,.8)*g*.6*step(.01,H)+vec3(.5,.1,.4)*smoothstep(.0,.3,H)*.4+vec3(.2,.9,1.)*(W*1.2+G*.8+ED); c+=vec3(.6,.2,1.)*.004/(abs(S-.5)+.004)*step(.05,S)*.4;
+    c+=vec3(1.,.5,.2)*GL*.3;}
+  return c;}
+
+void main(){ vec2 p=(gl_FragCoord.xy-.5*R)/R.y;
+  vec3 c=TAB<.5?effectA(p):fireB(p);
+  gl_FragColor=vec4(clamp(c,0.,1.),1.);}
+</script>
+
+<script>
+// ===================== 参数表：每一招的名字、滑杆、说明 =====================
+const 招表 = [
+  {名: '① 噪声 → 火', 滑: '做到第几步（6 步）', 默: 1, 说: '「有规律的乱」。白噪声（电视雪花）→ 格子之间平滑过渡 → 大小不同的 5 层叠起来（每层频率 ×2、强度 ×0.5）→ 一直往上流 → 用下宽上窄的形状挡住 → 按热度上色（暗红 → 橙 → 黄 → 白）+ 火星。1982 年佩林做完电影觉得电脑画面太干净，发明了它，后来拿了奥斯卡技术成就奖。'},
+  {名: '② 流动', 滑: '流动图（左关 / 右开）', 默: 1, 说: '让贴图沿一个方向一直滚：瀑布、熔岩、刀光。只会直着滚，水就会穿过石头；「流动图」给每个点画上往哪流、流多快，水就绕着石头走（2010 年《求生之路2》《传送门2》）。技巧：两份贴图错开半个周期交替淡入淡出，看不出重置的跳变。'},
+  {名: '③ 溶解', 滑: '门槛', 默: 0.35, 自动: true, 说: '一张噪声图 + 一个门槛：比门槛暗的地方不画。门槛慢慢升高，东西一块块消失；在消失的边上（噪声刚刚高于门槛的一条窄带）加火光 = 烧成灰。倒过来放 = 传送出现、召唤登场。'},
+  {名: '④ 边缘光', 滑: '边缘指数（越大光越贴边）', 默: 0.4, 说: '斜着看一个表面它更反光（菲涅尔）。便宜公式：亮度 = (1 − 朝向镜头的程度)^指数（1994 年施利克的简化）。护盾、幽灵、透视描边都靠它；加六边形网格和被打中的涟漪，护盾就活了。'},
+  {名: '⑤ 扭曲', 滑: '扭曲强度', 默: 0.6, 说: '先把背后的画面画好，再按噪声把采样位置挪一挪：火上的热浪、爆炸的冲击波、玻璃和水的折射（2004《半条命2》）、隐身（2007《孤岛危机》）。'},
+  {名: '⑥ 叠加发光', 滑: '普通叠加（左）/ 加法发光（右）', 默: 1, 说: '普通颜色叠在一起会互相挡住；发光要把颜色「加」起来：叠得越多越亮，最亮处变白，再往外晕开（泛光）。2005 年《几何战争》满屏霓虹就靠它。'},
+  {名: '⑦ 顶点偏移', 滑: '风力', 默: 0.7, 说: '前几招改颜色，这一招改形状：把每根草（模型上的点）按波浪推来推去，越往上推得越多（偏移 × 高度²）。风是一道往前走的正弦波，所以能看见一道道草浪（《对马岛之魂》的草原、《盗贼之海》的海面）。'},
+  {名: '⑧ 卡通化', 滑: '色阶数（2～6）', 默: 0, 说: '左边平滑明暗，右边：明暗切成两三阶、高光变成硬边、外圈描一道线，三维就像手画的（2000《街头涂鸦》、后来的《风之杖》《原神》）。'},
+  {名: '⑨ 极坐标', 滑: '直的带子 → 卷成法阵 → 加漩涡', 默: 0.8, 说: '先画一条直的符文带（横坐标沿着带子），再把「角度」当横坐标、「半径」当纵坐标，带子就卷成了圈 = 法阵。越往里转得越快 = 漩涡、传送门。技能冷却的扇形、雷达扫描都是极坐标。'},
+  {名: '⑩ 距离场', 滑: '融合程度', 默: 0.5, 说: '不存图片，只存每个点离边缘多远。有了这个数：描边 = 距离接近 0，发光 = 1/距离，两个形状用「平滑最小值」像水银一样融在一起（2007 年用它让《军团要塞2》的字放多大都不糊）。'},
+  {名: '积木 · 细胞', 滑: '色块 / 裂纹（冰霜）/ 水底光纹', 默: 0.5, 说: '撒一些点，看每个像素离哪个点最近，平面被分成一块块（沃罗诺伊图，1908）。只留两块之间的交界线（第二近 − 第一近 很小的地方）= 裂纹；让点慢慢动、交界线发亮 = 水底光纹、冰面的霜。'},
+  {名: '积木 · 粒子', 滑: '时间（可以随意拖，倒退也行）', 默: 0.3, 自动: true, 说: '一个火星的位置 = 起点 + 速度 × 时间 + ½ × 重力 × 时间²。每颗火星一个随机数决定方向和速度。不用一帧帧推，给任何时刻都能直接算出来，所以能快进、倒退、暂停（1982 年为《星际迷航2》发明的粒子系统）。'},
+  {名: '积木 · 光线拐弯', 滑: '引力', 默: 0.6, 说: '让光线每走一步都被中心往里拉一点（牛顿引力近似），走够步数路线就弯了；靠太近的被吞掉 = 黑洞。背景方格被扭成一圈；吸积盘的后半部分被弯到上方和下方；朝我们转来的一侧更亮（多普勒）。'},
+];
+const 画风 = ['写实', '动漫', '水墨', '像素', '霓虹'];
+const 画风说 = [
+  '写实：热度从暗红 → 橙 → 黄 → 白平滑过渡；火光照亮地面；冲击波把背后的画面推开一点（热浪）。',
+  '动漫：热度切成三个色阶 + 一圈深色描边；时间一秒只画 12 张；命中那一下画面黑白反转。',
+  '水墨：背景换成宣纸，火变成墨，越靠边缘墨越浓（像在纸上洇开），只在最热处留一点朱红。',
+  '像素：6 个点并成一格；颜色只能从几种里挑，中间色靠棋盘一样的小点拼（抖动）。',
+  '霓虹：只留下等高线一样的几条边，其他涂黑，再让线往外发光。',
+];
+const 层表 = ['核（离中心越近越热）', '噪声推边缘、往上流', '蓄力粒子往中心收', '地上法阵（极坐标）', '飞行拖尾', '命中火团（先快后慢）', '冲击波圆环', '火花 30 颗（抛物线）', '烟 + 溶解（边上带火星）', '往上飘的余烬', '地上焦痕', '地面火光 + 闪白 + 木桩晃'];
+// ==========================================================================
+
+const $ = id => document.getElementById(id), cv = $('c');
+const gl = cv.getContext('webgl', {preserveDrawingBuffer: true});
+let 程序, U = {}, 当前招 = 0, 页 = 'A', 风 = 0, 层 = new Array(12).fill(1), 播 = true, 火时 = 0, 搭建 = -1, 搭时 = 0;
+function 建() {
+  if (!gl) { $('pNote').textContent = '这个浏览器不支持 WebGL。'; return; }
+  const vs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs, 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}'); gl.compileShader(vs);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, $('fs').textContent); gl.compileShader(fs);
+  if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(fs); $('pNote').textContent = '着色器编译出错：' + e; console.error(e); return; }
+  程序 = gl.createProgram(); gl.attachShader(程序, vs); gl.attachShader(程序, fs); gl.linkProgram(程序); gl.useProgram(程序);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(程序, 'a'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+  for (const k of ['R', 'T', 'M', 'P', 'TAB', 'STY', 'FT', 'L']) U[k] = gl.getUniformLocation(程序, k);
+}
+cv.addEventListener('webglcontextlost', () => { $('pNote').textContent = '显卡算不过来，画面停了（这台电脑的显卡太弱）。刷新页面再试；黑洞这一招最费。'; });
+function 画(t) {
+  if (!程序 || gl.isContextLost()) return;
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.uniform2f(U.R, cv.width, cv.height); gl.uniform1f(U.T, t); gl.uniform1f(U.M, 当前招); gl.uniform1f(U.P, +$('pVal').value);
+  gl.uniform1f(U.TAB, 页 === 'A' ? 0 : 1); gl.uniform1f(U.STY, 风);
+  const ft = 风 === 1 ? Math.floor(火时 * 12) / 12 : 火时;   // 动漫：一秒只画 12 张
+  gl.uniform1f(U.FT, ft); gl.uniform1fv(U.L, new Float32Array(层));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+// 界面
+招表.forEach((z, i) => { const b = document.createElement('button'); b.textContent = z.名; b.onclick = () => 选招(i); $('moves').appendChild(b); });
+function 选招(i) { 当前招 = i; const z = 招表[i]; $('pVal').value = z.默; $('pAuto').checked = !!z.自动; $('pName').textContent = z.滑; $('pNote').innerHTML = z.说;
+  [...$('moves').children].forEach((b, j) => b.classList.toggle('on', j === i)); }
+画风.forEach((n, i) => { const b = document.createElement('button'); b.textContent = n; b.onclick = () => { 风 = i; 刷B(); }; $('styles').appendChild(b); });
+层表.forEach((n, i) => { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" checked data-i="${i}">${i + 1}. ${n}`; $('lays').appendChild(l); });
+$('lays').addEventListener('change', e => { 层[+e.target.dataset.i] = e.target.checked ? 1 : 0; 搭建 = -1; });
+function 设层(arr) { 层 = arr.slice(); $('lays').querySelectorAll('input').forEach((x, i) => x.checked = !!层[i]); }
+$('bAll').onclick = () => { 搭建 = -1; 设层(new Array(12).fill(1)); };
+$('bCore').onclick = () => { 搭建 = -1; 设层([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); };
+$('bBuild').onclick = () => { 搭建 = 0; 搭时 = 0; 设层([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); 火时 = 0; 播 = true; $('bPlay').textContent = '暂停'; };
+$('bPlay').onclick = () => { 播 = !播; $('bPlay').textContent = 播 ? '暂停' : '播放'; };
+$('bT').oninput = () => { 火时 = +$('bT').value; 播 = false; $('bPlay').textContent = '播放'; };
+function 刷B() { [...$('styles').children].forEach((b, j) => b.classList.toggle('on', j === 风));
+  $('bNote').innerHTML = `<b>${画风[风]}</b>　${画风说[风]}<br><span class="dim">同一个火球、同一堆灰度数据（热度、烟、冲击波、法阵、焦痕、地面光……），换的只是最后「上色」的几十行。一个技能分五段：蓄力 0～0.9 秒、释放、飞行 0.9～1.6 秒、命中 1.6 秒、余波到 3.2 秒。</span>`; }
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { 页 = b.dataset.t;
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  $('pA').classList.toggle('hide', 页 !== 'A'); $('pB').classList.toggle('hide', 页 !== 'B'); });
+const 阶段 = t => t < 0.9 ? '蓄力' : t < 1.6 ? '飞行' : t < 1.75 ? '命中！' : '余波';
+let 上 = performance.now(), 总 = 0;
+function 一步(dt) {
+  总 += dt;
+  if ($('pAuto').checked) $('pVal').value = 0.5 - 0.5 * Math.cos(总 * 0.8);
+  if (播) { 火时 += dt; if (火时 > 3.2) { 火时 = 0; if (搭建 >= 0 && 搭建 < 11) { 搭建++; 层[搭建] = 1; 设层(层); } } }
+  $('bT').value = 火时; $('bPhase').textContent = 阶段(火时) + (搭建 >= 0 ? `（第 ${搭建 + 1} 层）` : '');
+}
+function 帧(now) { const dt = Math.max(0, Math.min(0.05, (now - 上) / 1000)); 上 = now; 一步(dt); 画(总); requestAnimationFrame(帧); }
+建(); 选招(0); 刷B(); requestAnimationFrame(帧);
+</script>
+</body>
+</html>

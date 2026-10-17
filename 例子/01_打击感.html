@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>01 打击感 · 小例子</title>
+<style>
+:root{--bg:#0d0b14;--panel:#17141f;--line:#2a2535;--txt:#ece7f5;--dim:#9a93a8;--acc:#ffc84a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,sans-serif;display:flex;flex-wrap:wrap;gap:12px;padding:12px}
+#side{flex:0 1 270px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+#stage{flex:1 1 420px;min-width:280px}
+canvas{width:100%;max-width:640px;background:#05060d;border-radius:10px;display:block;touch-action:none}
+h1{font-size:16px;margin:0 0 4px}
+.tip{color:var(--dim);font-size:12px;margin:0 0 8px}
+label{display:flex;gap:8px;align-items:flex-start;padding:2px 0;cursor:pointer}
+label small{color:var(--dim);display:block;font-size:11px;line-height:1.3}
+button{background:#2a2535;color:var(--txt);border:1px solid #3a3448;border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.on{background:var(--acc);color:#1a1405;border-color:var(--acc);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+@media(max-width:720px){#stage{order:-1}}  /* 手机上画面放最上面，开关在下面 */
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>01 打击感：汁水 12 招</h1>
+  <p class="tip">鼠标左右移动（或 A / D、← →）控制飞船，自动开火；不操作时自动瞄准。一招一招打开，对比手感。</p>
+  <label><input type="checkbox" id="auto" checked><span>自动进阶<small>从机枪开始，打怪攒经验，越打武器越强；手动点武器就关掉它</small></span></label>
+  <div class="tip" style="margin:0">武器（数字键 1～5 也能换）：</div>
+  <div class="row" id="guns"></div>
+  <p class="tip" id="gunTip"></p>
+  <div class="row">
+    <button id="allOff">全关</button><button id="allOn">全开</button><button id="cut">减法版（推荐）</button>
+  </div>
+  <div id="toggles"></div>
+  <hr>
+  <label><input type="checkbox" id="rule"><span>收着用<small>顿帧只给打死大怪（0.12 秒）；冲击波只给大怪、缩成小涟漪；发光压暗；小怪的震屏减轻</small></span></label>
+</div>
+<div id="stage"><canvas id="c" width="1080" height="1296"></canvas></div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+// 时间单位：秒。距离单位：格（= 背景网格的一格；画面宽约 17 格）。
+// 分小怪 / 中怪 / 大怪的写成 {小, 中, 大}。「× 几」的亮度：超过 1 就是「比白还亮」，会往外溢光。
+const 参数 = {
+  闪白: {时长: 0.035, 亮: 1.4},             // 约 1 帧：整只变纯白（身体填白、边比白还亮）。只闪 1 帧，所以还认得出是谁
+  击退: {距离: 0.3, 衰减: 11, 大怪: 0.4},     // 每一枪沿子弹方向猛推 0.3 格，再按 e^(-11×秒) 退回原位；几枪叠加；大怪只推 0.4 倍
+  挤压: {普通: 0.32, 暴击: 0.55, 封顶: 0.6, 衰减: 16, 横胖: 0.6, 竖扁: 0.45},  // 扁度 = 每枪 e^(-16×秒) 相加再封顶；宽 ×(1+0.6×扁)，高 ×(1-0.45×扁)
+  后坐: {衰减: 28, 下移: 0.22, 横胖: 0.12, 竖扁: 0.16},  // 飞船每开一枪往后一缩，按 e^(-28×秒) 回来
+  顿帧: {小: 0.05, 中: 0.08, 大: 0.3},       // 只在打死时；整个游戏停住（怪、子弹、火花、飘字都停），只有震屏照常抖
+  震屏: {小: 0.22, 中: 0.38, 大: 1.1, 封顶: 1.3},  // 每次击杀加的「创伤值」，几次叠加
+  震屏衰减: {小: 9, 中: 9, 大: 4},            // 创伤值按 e^(-衰减×秒) 退；大怪退得慢
+  震屏幅度: 0.45, 震屏细抖: 0.12, 震屏转角: 0.02,  // 位移 = 创伤²×0.45 格 + 创伤×0.12 格，用几条快的正弦（平滑地晃，不是每帧乱跳）；转角 = 创伤²×0.02 弧度
+  冲击波: {时长: 0.8, 扩散: 11, 大小: {小: 0.6, 中: 0.9, 大: 2.2}, 环宽: 0.07, 环宽每大小: 0.05, 不透明: 0.55, 推网格: 0.55, 推宽: 0.9},
+  //   半径 = 0.3 + 秒 × 11 × √大小 格（大怪 0.8 秒后约 13 格 = 大半个屏）；环越扩越淡：不透明 0.55 × (1-进度)^1.5；网格被推开 大小×0.55 格
+  命中火花: {颗: 5, 寿: 0.28, 速: [7, 13], 散: 1.8, 长: 0.35, 宽: 0.06},  // 往子弹来的方向溅回去（±0.9 弧度）；暴击是白的
+  碎片: {数: {小: 14, 中: 22, 大: 70}, 寿: {小: 0.6, 中: 0.8, 大: 1.6}, 速: [3, 11], 阻力: 3.2, 大小: [0.1, 0.24], 大怪更快: 1.6, 大怪更大: 1.4, 转: 9},  // 每 4 片有 1 片白的
+  飘字: {时长: 0.75, 开始淡: 0.5, 上飘: 2.6, 散横: 1.8, 散竖: 0.6, 字高: 0.58, 暴击放大: 1.7, 暴击抖: 0.25, 抖幅: 0.08, 弹簧阻尼: 8, 弹簧刚度: 260},
+  //   弹簧弹出（冲到 1.45 倍再回来）→ 匀速往上飘 2.6 格/秒 → 0.5 秒后 0.25 秒淡掉；位置随机散开，同一处的字不会叠死
+  暴击: {率: 0.2, 倍: 3},
+  子弹: {速度: 30, 头长: 0.34, 头宽: 0.14, 尾长: 1.6, 尾宽: 0.12},   // 关掉「拖尾」时子弹只是一个小圆点
+  枪口火光: {时长: 0.045, 亮: 3, 大小: 0.5},
+  发光: {亮度倍数: 1.7, 泛光强度: 0.75, 泛光半径: 0.4, 门槛: 0.4},
+  //   亮度倍数：发光的东西颜色 ×1.7（超过白）；泛光：亮度超过门槛的部分，按 5 层由小到大的模糊叠回去；最后用电影式色调曲线压回屏幕能显示的范围（太亮的变白热，周围留彩色光晕）
+  光点: {数: {小: 4, 中: 7, 大: 16}, 先等: 0.05, 间隔: 0.03, 飞行: 0.55, 甩横: 3, 甩竖: 2, 大小: 0.13},
+  分数: {小: 100, 中: 250, 大: 2000, 等: 0.45, 滚: 0.35},  // 打死后等 0.45 秒（光点飞到）再用 0.35 秒匀速滚上去
+  连击断开: 0.8,                            // 多久没打中，连击清零（连击字也消失）
+  音调每连击: 1 / 24, 音调封顶连击: 36,       // 每连击一次升高 1/24 个八度，24 次正好一个八度，36 次封顶
+  // 「收着用」（打击感做减法）：没写的照全开
+  收着: {顿帧: {小: 0, 中: 0, 大: 0.12}, 泛光强度: 0.28, 亮度倍数: 1.25, 冲击波大小: 0.4, 冲击波只给大怪: true, 震屏: {小: 0.35, 中: 0.6, 大: 1}},
+  // 武器：同样 12 招，换一种武器手感就完全不同。伤 = 每一下的伤害倍数（基础 14～26 点；小怪 40 血、中怪 95、大怪 560），推 = 击退倍数
+  武器: {
+    机枪:   {射速: 1 / 16, 伤: 1,   推: 1,    色: '#ffe066', 说: '一秒 16 发、一下很轻：靠连击数和音调往上走撑手感'},
+    散弹:   {射速: 0.36, 伤: 1,   推: 0.8,  色: '#ff9a3d', 颗数: 6, 散角: 0.6, 射程: 0.5, 说: '一次 6 颗扇形、射程短：贴脸一喷满屏火花，后坐力大'},
+    激光:   {每跳: 0.07, 伤: 0.6, 推: 0.25, 色: '#ff4df0', 宽: 0.24, 说: '一直照着、每 0.07 秒扣一次血：没有「一下」，靠接触点的亮团和抖动的光束撑手感'},
+    导弹:   {射速: 0.42, 伤: 3,   推: 1.6,  色: '#7dffcf', 转向: 6, 爆炸半径: 1.85, 说: '慢、会拐弯追怪，炸开时溅伤一圈：等了一会儿之后的「砰」最爽'},
+    电磁炮: {射速: 0.8,  伤: 5,   推: 2.5,  色: '#9fd8ff', 说: '很久才一发，瞬间打穿一整列怪：每一发都要大后坐、大震屏、光束慢慢消失'},
+  },
+  // 自动进阶：打死怪给经验，攒满就换下一把（机枪→散弹→激光→导弹→电磁炮）
+  进阶: {
+    经验: {小: 1, 中: 3, 大: 12},
+    升级所需: [8, 20, 32, 46],    // 第 1 次升级只要 8 点，之后越来越多：前面升得快，让人马上尝到甜头
+    庆祝时长: 1.4,                // 「武器升级！」大字停多久
+    满级后重来: 25,               // 满级玩多少秒后从机枪重新来一轮（演示用）
+  },
+};
+// ===========================================================
+
+const 招 = [
+  ['flash', '闪白', '打中那一帧整只变白'],
+  ['knock', '击退', '每一枪往后推一下再回来'],
+  ['squash', '挤压拉伸', '被打扁再弹回；飞船开枪往后缩'],
+  ['num', '伤害飘字', '弹出→上飘→淡出，暴击大、红、抖'],
+  ['part', '粒子', '命中溅火花，打死碎一地'],
+  ['stop', '顿帧', '打死那一刻整个游戏停一下'],
+  ['shake', '震屏', '越大的爆炸抖得越狠'],
+  ['shock', '冲击波', '一圈光环推开网格'],
+  ['trail', '拖尾和枪口火光', ''],
+  ['glow', '发光', '亮的地方往外溢光'],
+  ['sound', '音效', '连着打中音调往上走'],
+  ['combo', '连击和分数', '分数哗哗地滚'],
+];
+const on = {};
+const box = document.getElementById('toggles');
+for (const [k, n, s] of 招) {
+  const l = document.createElement('label');
+  l.innerHTML = `<input type="checkbox" data-k="${k}"><span>${n}${s ? `<small>${s}</small>` : ''}</span>`;
+  box.appendChild(l);
+}
+const rule = document.getElementById('rule');
+function 同步() { for (const i of box.querySelectorAll('input')) on[i.dataset.k] = i.checked; }
+function 设(ks, r) { for (const i of box.querySelectorAll('input')) i.checked = ks.includes(i.dataset.k); rule.checked = r; 同步(); }
+box.addEventListener('change', 同步);
+document.getElementById('allOff').onclick = () => 设([], false);
+document.getElementById('allOn').onclick = () => 设(招.map(z => z[0]), false);
+document.getElementById('cut').onclick = () => 设(招.map(z => z[0]), true);
+设(招.map(z => z[0]), false);   /* 打开就是全开，看完再点「减法版」对比 */
+let 武 = '机枪';
+const 枪栏 = document.getElementById('guns');
+const 枪名 = Object.keys(参数.武器);
+const 自动 = document.getElementById('auto');
+let 级 = 0, 经验 = 0, 满级时 = null, 升时 = -9, 升名 = '';
+function 换武器(n, 是自动) {
+  if (!是自动) 自动.checked = false;   // 手动挑了武器，就不再自动升级
+  武 = n; 冷却 = 0;
+  for (const b of 枪栏.children) b.classList.toggle('on', b.textContent.endsWith(n));
+  document.getElementById('gunTip').textContent = 参数.武器[n].说;
+}
+枪名.forEach((n, i) => { const b = document.createElement('button'); b.textContent = `${i + 1} ${n}`; b.onclick = () => 换武器(n, false); 枪栏.appendChild(b); });
+
+// ---------------- 画布 ----------------
+// 游戏按 640×768 的「逻辑像素」算；真正画在 1080×1296 上（和原片同样的清晰度，发光的大小才对得上）。
+const cv = document.getElementById('c'), 屏 = cv.getContext('2d');
+const W = 640, H = 768, GW = cv.width, GH = cv.height, 倍 = GW / W;
+const 格 = W / 16.875;   // 一格多少逻辑像素（画面宽约 16.9 格）
+const 收着 = () => rule.checked;
+const 种类 = {
+  小: {hp: 40, r: 0.42, 色: '#ff3db8', 边: 4, 名: '小'},
+  中: {hp: 95, r: 0.62, 色: '#ffa53d', 边: 6, 名: '中'},
+  大: {hp: 560, r: 1.15, 色: '#6dff5a', 边: 4, 名: '大'},
+};
+let 光束 = [], 激光端 = null, 激光跳 = 0;
+let 敌 = [], 弹 = [], 火花 = [], 碎片 = [], 字 = [], 波 = [], 光点 = [], 杀分 = [], 震 = [];
+const 船 = {x: W / 2, y: H - 80, 枪时: -9, 后坐强: 1, 火光强: 1};
+let 上次操作 = -9, 目标x = W / 2, 冷却 = 0, 顿 = 0, 连击 = 0, 上次中 = -9, 底分 = 0, 时 = 0, 游 = 0, 生成 = 0, 大计时 = 4;
+const 键 = {};
+addEventListener('keydown', e => { 键[e.key.toLowerCase()] = true; 上次操作 = 时; const i = '12345'.indexOf(e.key); if (i >= 0) 换武器(枪名[i], false); });
+addEventListener('keyup', e => 键[e.key.toLowerCase()] = false);
+cv.addEventListener('pointermove', e => { const r = cv.getBoundingClientRect(); 目标x = (e.clientX - r.left) / r.width * W; 上次操作 = 时; });
+
+function 出怪(k) {
+  const t = 种类[k];
+  敌.push({k, 色: t.色, 边: t.边, r: t.r * 格, hp: t.hp, hpMax: t.hp, x: 60 + Math.random() * (W - 120), y: -50, ph: Math.random() * 6, 白: -9, 击: []});
+}
+// 怪现在画在哪：底下的位置 + 击退（每一枪推一下再退回，几枪叠加）
+function 击退量(e) {
+  let x = 0, y = 0;
+  if (on.knock) for (const h of e.击) { const a = 游 - h.t; if (a < 0.6) { const k = 参数.击退.距离 * 格 * h.推 * Math.exp(-a * 参数.击退.衰减); x += h.dx * k; y += h.dy * k; } }
+  const m = e.k === '大' ? 参数.击退.大怪 : 1;
+  return [x * m, y * m];
+}
+const 位 = e => { const [a, b] = 击退量(e); return [e.x + a, e.y + b]; };
+
+// ---------------- 声音（全部现算，不用音频文件） ----------------
+let ac = null, 噪声 = null, 总音 = null;
+function 音() {
+  if (!on.sound) return null;
+  if (!ac) {
+    ac = new AudioContext(); 总音 = ac.createGain(); 总音.gain.value = 0.6; 总音.connect(ac.destination);
+    噪声 = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate); const d = 噪声.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return ac;
+}
+// 一层声音：波形（或噪声→滤波）+ 指数衰减。频率可以从 f0 滑到 f1。
+function 层(类型, f0, f1, 时长, 衰减, 音量, 滤 = null) {
+  const t = ac.currentTime, v = ac.createGain();
+  v.gain.setValueAtTime(音量, t); v.gain.setTargetAtTime(0, t, 1 / 衰减);
+  let src;
+  if (类型 === 'noise') { src = ac.createBufferSource(); src.buffer = 噪声; src.loopStart = Math.random(); }
+  else { src = ac.createOscillator(); src.type = 类型; src.frequency.setValueAtTime(f0, t); if (f1) src.frequency.linearRampToValueAtTime(f1, t + 时长); }
+  let n = src;
+  if (滤) { const f = ac.createBiquadFilter(); f.type = 滤[0]; f.frequency.value = 滤[1]; if (滤[2]) f.Q.value = 滤[2]; n.connect(f); n = f; }
+  n.connect(v).connect(总音); src.start(t, 类型 === 'noise' ? Math.random() : 0); src.stop(t + 时长);
+}
+const 声 = {
+  枪() { if (!音()) return; 层('square', 1500, 520, 0.07, 55, 0.5 * 0.10 * 0.3); 层('noise', 0, 0, 0.07, 90, 0.3 * 0.10, ['highpass', 3000]); },
+  中(连, 暴) {
+    if (!音()) return; const f0 = 520 * Math.pow(2, Math.min(连, 参数.音调封顶连击) * 参数.音调每连击);
+    层('sine', f0 * 1.6, f0, 0.09, 40, 0.22); 层('noise', 0, 0, 0.09, 120, 0.5 * 0.22, ['bandpass', 4200, 0.9]);
+    if (暴) 层('sawtooth', f0 * 2, 0, 0.09, 35, 0.6 * 0.22 * 0.5);
+  },
+  死(k) {
+    if (!音()) return; const d = {小: 0.35, 中: 0.55, 大: 1.8}[k], g = {小: 0.45, 中: 0.6, 大: 1}[k];
+    层('sine', {小: 220, 中: 160, 大: 110}[k], 40, d, {小: 14, 中: 9, 大: 3.2}[k], 0.9 * g);
+    层('noise', 0, 0, d, {小: 18, 中: 10, 大: 2.6}[k], 0.7 * g * 0.6, ['lowpass', {小: 5000, 中: 3500, 大: 2500}[k]]);
+  },
+  其他(类型, f0, f1, 时长, 音量) { if (音()) 层(类型, f0, f1, 时长, 4 / 时长, 音量); },
+  噪(时长, 音量, 低通) { if (音()) 层('noise', 0, 0, 时长, 4 / 时长, 音量, ['lowpass', 低通]); },
+};
+addEventListener('pointerdown', () => { if (ac) ac.resume(); else if (on.sound) 音(); });
+
+// ---------------- 打中、打死 ----------------
+function 命中(e, b) {
+  const 暴 = Math.random() < 参数.暴击.率, 伤 = Math.round((14 + Math.random() * 13 | 0) * (b.伤 ?? 1) * (暴 ? 参数.暴击.倍 : 1));
+  const [ex, ey] = 位(e), 长 = Math.hypot(b.vx, b.vy) || 1, dx = b.vx / 长, dy = b.vy / 长;
+  e.hp -= 伤; e.白 = 游;
+  e.击.push({t: 游, dx, dy, 暴, 推: b.推 ?? 1}); if (e.击.length > 40) e.击.shift();
+  if (on.num) 字.push({x: b.x + (Math.random() - 0.5) * 参数.飘字.散横 * 格, y: b.y - (0.5 + (Math.random() - 0.5) * 参数.飘字.散竖) * 格, 文: 伤 + (暴 ? '!' : ''), 暴, t: 游});
+  if (on.part) for (let i = 0; i < 参数.命中火花.颗; i++) {   // 火花往子弹来的方向溅回去
+    const [v0, v1] = 参数.命中火花.速;
+    火花.push({x: b.x, y: b.y, a: Math.atan2(-dy, -dx) + (Math.random() - 0.5) * 参数.命中火花.散, v: (v0 + Math.random() * (v1 - v0)) * 格, t: 游, 暴, 色: b.色 && b.色 !== '#ffe066' ? b.色 : '#ffe9a0'});
+  }
+  连击 = 游 - 上次中 < 参数.连击断开 ? 连击 + 1 : 1; 上次中 = 游;
+  声.中(连击, 暴);
+  if (e.hp <= 0) 击杀(e, ex, ey);
+}
+function 加震(v, 衰) { if (on.shake) 震.push({t: 时, v, 衰}); }
+function 击杀(e, x, y) {
+  e.死 = true;
+  const k = e.k, 大 = k === '大', 收 = 收着();
+  if (on.part) for (let i = 0; i < 参数.碎片.数[k]; i++) {
+    const [v0, v1] = 参数.碎片.速, [s0, s1] = 参数.碎片.大小;
+    碎片.push({x, y, a: Math.random() * Math.PI * 2, v: (v0 + Math.random() * (v1 - v0)) * (大 ? 参数.碎片.大怪更快 : 1) * 格, t: 游, 寿: 参数.碎片.寿[k],
+      s: (s0 + Math.random() * (s1 - s0)) * (大 ? 参数.碎片.大怪更大 : 1) * 格, 色: i % 4 ? e.色 : '#ffffff', 转: i});
+  }
+  if (on.stop) 顿 += (收 ? 参数.收着.顿帧 : 参数.顿帧)[k];
+  加震(参数.震屏[k] * (收 ? 参数.收着.震屏[k] : 1), 参数.震屏衰减[k]);
+  if (on.shock && (!收 || !参数.收着.冲击波只给大怪 || 大)) 波.push({x, y, t: 游, s: 参数.冲击波.大小[k], 缩: 收 ? 参数.收着.冲击波大小 : 1});
+  const 值 = 参数.分数[k];
+  杀分.push({t: 游, 值});
+  if (on.combo) for (let i = 0; i < 参数.光点.数[k]; i++)
+    光点.push({x0: x, y0: y, ox: (Math.random() - 0.5) * 参数.光点.甩横 * 格, oy: -Math.random() * 参数.光点.甩竖 * 格, t: 游 + 参数.光点.先等 + i * 参数.光点.间隔});
+  if (自动.checked) 加经验(参数.进阶.经验[k]);
+  声.死(k);
+}
+
+// ---------------- 五种武器怎么开火 ----------------
+function 开火(枪) {
+  const 基 = {生: 游, 种: 武, 伤: 枪.伤, 推: 枪.推, 色: 枪.色}, 口y = 船.y - 0.5 * 格;
+  if (武 === '机枪') {
+    const a = (Math.random() - 0.5) * 0.05, v = 参数.子弹.速度 * 格;
+    弹.push({...基, x: 船.x, y: 口y, vx: Math.sin(a) * v, vy: -Math.cos(a) * v});
+    声.枪();
+  } else if (武 === '散弹') {
+    for (let i = 0; i < 枪.颗数; i++) {
+      const a = (i / (枪.颗数 - 1) - 0.5) * 枪.散角 + (Math.random() - 0.5) * 0.08, v = (22 + Math.random() * 4) * 格;
+      弹.push({...基, x: 船.x, y: 口y, vx: Math.sin(a) * v, vy: -Math.cos(a) * v, 寿: 枪.射程 * (0.85 + Math.random() * 0.3)});
+    }
+    声.噪(0.12, 0.12, 2500); 加震(0.12, 9);
+  } else if (武 === '导弹') {
+    for (const 边 of [-1, 1]) 弹.push({...基, x: 船.x + 边 * 16, y: 船.y - 6, vx: 边 * 320, vy: -180, 迹: []});
+    声.其他('sawtooth', 300, 120, 0.18, 0.03);
+  } else if (武 === '电磁炮') { // 一条线上的怪全部打穿
+    for (const e of 敌) { const [ex, ey] = 位(e); if (!e.死 && Math.abs(ex - 船.x) < e.r + 6 && ey < 船.y) 命中(e, {x: 船.x, y: ey + e.r * 0.5, vx: 0, vy: -1, 伤: 枪.伤, 推: 枪.推, 色: 枪.色}); }
+    光束.push({x: 船.x, t: 游});
+    加震(0.35, 9);
+    声.其他('sawtooth', 1800, 90, 0.35, 0.05); 声.噪(0.25, 0.15, 4000);
+  }
+  船.枪时 = 游; 船.后坐强 = 武 === '电磁炮' ? 2 : 武 === '散弹' ? 1.5 : 1; 船.火光强 = 武 === '电磁炮' ? 1.6 : 1;
+}
+function 爆炸(b) { // 导弹炸开：半径内的其他怪吃一半伤害
+  const R = 参数.武器.导弹.爆炸半径 * 格;
+  for (const e of 敌) { const [ex, ey] = 位(e); if (!e.死 && Math.hypot(ex - b.x, ey - b.y) < R + e.r) 命中(e, {...b, 伤: b.伤 * 0.5, 推: b.推 * 0.6}); }
+  if (on.shock && !收着()) 波.push({x: b.x, y: b.y, t: 游, s: 参数.冲击波.大小.小, 缩: 1});
+  if (on.part) for (let i = 0; i < 12; i++) 碎片.push({x: b.x, y: b.y, a: Math.random() * 7, v: (5 + Math.random() * 8) * 格, t: 游, 寿: 0.4, s: 0.16 * 格, 色: i % 2 ? b.色 : '#ffffff', 转: i});
+  加震(0.1, 9);
+  声.噪(0.25, 0.14, 900);
+}
+
+// ---------------- 自动进阶 ----------------
+function 加经验(v) {
+  if (级 >= 枪名.length - 1) return;
+  经验 += v;
+  if (经验 >= 参数.进阶.升级所需[级]) { 经验 = 0; 级++; 升级('武器升级！'); }
+}
+function 升级(标题) {
+  换武器(枪名[级], true);
+  升时 = 时; 升名 = 标题;
+  if (级 >= 枪名.length - 1) 满级时 = 时;
+  [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => 声.其他('triangle', f, 0, 0.18, 0.07), i * 70));   // 往上走的四个音
+}
+自动.addEventListener('change', () => { if (自动.checked) { 级 = 0; 经验 = 0; 满级时 = null; 升级('自动进阶：从头开始'); } });
+
+// ---------------- 每帧 ----------------
+let 上帧 = performance.now();
+function 帧(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - 上帧) / 1000)); 上帧 = now; 时 += dt;
+  // 顿帧：整个游戏时间停住（怪、子弹、火花、飘字、冲击波都停），只有震屏和界面按真实时间走
+  let gdt = dt;
+  if (顿 > 0) { 顿 -= dt; gdt = 顿 < 0 ? -顿 : 0; if (顿 < 0) 顿 = 0; }
+  游 += gdt;
+  const 停 = gdt === 0;
+
+  // 飞船
+  if (键.a || 键.arrowleft) 目标x -= 600 * dt;
+  if (键.d || 键.arrowright) 目标x += 600 * dt;
+  if (时 - 上次操作 > 2 && 敌.length) { // 两秒没人操作：自动瞄准——有大怪先打大怪，否则打最低的那只
+    const 大怪 = 敌.find(e => e.k === '大' && e.y > 60 && e.y < H - 160);
+    const e = 大怪 || 敌.reduce((a, b) => (b.y > a.y && b.y < H - 120 ? b : a));
+    目标x = 位(e)[0];
+  }
+  目标x = Math.max(30, Math.min(W - 30, 目标x));
+  船.x += (目标x - 船.x) * Math.min(1, gdt * 12);
+  冷却 -= gdt;
+  const 枪 = 参数.武器[武];
+  if (武 !== '激光' && 冷却 <= 0 && !停) { 冷却 += 枪.射速; if (冷却 < 0) 冷却 = 枪.射速; 开火(枪); }
+  激光端 = null;
+  if (武 === '激光') { // 激光：照到正上方最近的一只怪为止，每一跳扣一次血
+    const 中 = 敌.filter(e => !e.死 && Math.abs(位(e)[0] - 船.x) < e.r * 0.9 && 位(e)[1] < 船.y).sort((a, b) => 位(b)[1] - 位(a)[1])[0];
+    激光端 = 中 ? 位(中)[1] + 中.r * 0.5 : -20;
+    激光跳 -= gdt;
+    if (中 && 激光跳 <= 0 && !停) { 激光跳 = 枪.每跳; 命中(中, {x: 船.x, y: 激光端, vx: 0, vy: -1, 伤: 枪.伤, 推: 枪.推, 色: 枪.色}); }
+  }
+
+  // 出怪
+  生成 -= gdt; 大计时 -= gdt;
+  if (生成 <= 0) { 生成 = 0.5; 出怪(Math.random() < 0.25 ? '中' : '小'); }
+  if (大计时 <= 0 && !敌.some(e => e.k === '大')) { 大计时 = 9; 出怪('大'); }
+
+  for (const b of 弹) {
+    if (b.种 === '导弹' && gdt > 0) { // 导弹：速度方向一点点拐向最近的怪
+      const 目 = 敌.filter(e => !e.死 && e.y > -20).sort((p, q) => Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y))[0];
+      const 速 = Math.min(760, Math.hypot(b.vx, b.vy) + 900 * gdt);
+      let 向x = 0, 向y = -1;
+      if (目) { const [tx, ty] = 位(目), dx = tx - b.x, dy = ty - b.y, L = Math.hypot(dx, dy) || 1; 向x = dx / L; 向y = dy / L; }
+      const k = Math.min(1, 参数.武器.导弹.转向 * gdt);
+      b.vx += (向x * 速 - b.vx) * k; b.vy += (向y * 速 - b.vy) * k;
+      b.迹.push([b.x, b.y]); if (b.迹.length > 14) b.迹.shift();
+    }
+    b.x += b.vx * gdt; b.y += b.vy * gdt;
+    for (const e of 敌) { if (e.死 || b.死) continue; const [ex, ey] = 位(e); if (Math.hypot(b.x - ex, b.y - ey) < e.r * 0.84 + 0.06 * 格) { b.死 = true; 命中(e, b); if (b.种 === '导弹') 爆炸(b); } }
+  }
+  弹 = 弹.filter(b => !b.死 && b.y > -60 && b.y < H + 40 && b.x > -40 && b.x < W + 40 && 游 - b.生 < (b.寿 ?? 9));
+  光束 = 光束.filter(l => 游 - l.t < 0.35);
+  for (const e of 敌) { const sp = {小: 70, 中: 50, 大: 28}[e.k]; e.y += sp * gdt; e.x += Math.sin(游 * 1.3 + e.ph) * 40 * gdt; }
+  敌 = 敌.filter(e => !e.死 && e.y < H + 80);
+
+  火花 = 火花.filter(p => 游 - p.t < 参数.命中火花.寿);
+  碎片 = 碎片.filter(p => 游 - p.t < p.寿);
+  光点 = 光点.filter(p => 游 - p.t < 参数.光点.飞行);
+  字 = 字.filter(n => 游 - n.t < 参数.飘字.时长);
+  波 = 波.filter(w => 游 - w.t < 参数.冲击波.时长);
+  震 = 震.filter(s => 时 - s.t < 1.2);
+  for (const q of 杀分) if (游 - q.t > 参数.分数.等 + 参数.分数.滚 + 0.5) { 底分 += q.值; q.完 = true; }
+  杀分 = 杀分.filter(q => !q.完);
+  if (游 - 上次中 > 参数.连击断开) 连击 = 0;
+  if (自动.checked && 满级时 !== null && 时 - 满级时 > 参数.进阶.满级后重来) { 级 = 0; 经验 = 0; 满级时 = null; 升级('新一轮'); }
+
+  画();
+  requestAnimationFrame(帧);
+}
+
+// ================= 画面：WebGL，按「比白还亮」的颜色画，再做泛光 + 电影式调色 =================
+// 做法（和常见游戏引擎的泛光一样）：
+//  ① 所有东西画进一张「浮点」画面（颜色可以超过 1）
+//  ② 只留下亮度超过门槛的部分 → 缩到一半大
+//  ③ 连续缩 5 次（一半、四分之一……），每层用越来越大的模糊核（3、5、7、9、11）糊开
+//  ④ 5 层按权重加起来叠回原画面：近处一圈亮、远处一大片淡淡的晕
+//  ⑤ 用电影式色调曲线（ACES）把超过 1 的颜色压回屏幕能显示的范围：特别亮的变成白热芯，周围留彩色光晕
+const glc = document.createElement('canvas'); glc.width = GW; glc.height = GH;
+const gl = glc.getContext('webgl2', {antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true});
+if (!gl) { 屏.fillStyle = '#fff'; 屏.font = '32px sans-serif'; 屏.fillText('这个浏览器不支持 WebGL2，换一个新版 Chrome / Edge / Firefox 再打开', 40, 100); throw new Error('no webgl2'); }
+const 浮点 = !!gl.getExtension('EXT_color_buffer_float');   // 没有就退回普通颜色（发光会弱一些）
+function 编(vs, fs) {
+  const p = gl.createProgram();
+  for (const [t, s] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) { const sh = gl.createShader(t); gl.shaderSource(sh, '#version 300 es\nprecision highp float;\n' + s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); gl.attachShader(p, sh); }
+  gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) { const a = gl.getActiveUniform(p, i); u[a.name.replace('[0]', '')] = gl.getUniformLocation(p, a.name); }
+  return {p, u};
+}
+// 画形状：每个顶点 = 位置（逻辑像素）+ 颜色（线性、可超过 1）+ 不透明度；镜头的晃和转在这里加
+const 形 = 编(`in vec2 p; in vec4 c; out vec4 vc; uniform vec2 uSize, uCam; uniform float uRot;
+  void main(){ vec2 q = p - uSize * 0.5 + uCam; float s = sin(uRot), k = cos(uRot); q = vec2(k * q.x - s * q.y, s * q.x + k * q.y) + uSize * 0.5;
+  vc = c; gl_Position = vec4(q.x / uSize.x * 2.0 - 1.0, 1.0 - q.y / uSize.y * 2.0, 0.0, 1.0); }`,
+  `in vec4 vc; out vec4 o; void main(){ o = vc; }`);
+const 全屏 = `out vec2 uv; void main(){ vec2 v = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); uv = v; gl_Position = vec4(v * 2.0 - 1.0, 0.0, 1.0); }`;
+const 贴字 = 编(全屏, `in vec2 uv; out vec4 o; uniform sampler2D t; void main(){ vec4 c = texture(t, vec2(uv.x, 1.0 - uv.y)); o = vec4(pow(c.rgb, vec3(2.2)), c.a); }`);
+const 取亮 = 编(全屏, `in vec2 uv; out vec4 o; uniform sampler2D t; uniform float uTh;
+  void main(){ vec4 c = texture(t, uv); float v = dot(c.rgb, vec3(0.2126729, 0.7151522, 0.072175)); o = mix(vec4(0.0), c, smoothstep(uTh, uTh + 0.01, v)); }`);
+const 糊 = 编(全屏, `in vec2 uv; out vec4 o; uniform sampler2D t; uniform vec2 uInv, uDir; uniform int uK; uniform float uW[11];
+  void main(){ float ws = uW[0]; vec3 s = texture(t, uv).rgb * ws;
+  for (int i = 1; i < 11; i++) { if (i >= uK) break; vec2 d = uDir * uInv * float(i); s += (texture(t, uv + d).rgb + texture(t, uv - d).rgb) * uW[i]; ws += 2.0 * uW[i]; }
+  o = vec4(s / ws, 1.0); }`);
+const 出图 = 编(全屏, `in vec2 uv; out vec4 o; uniform sampler2D t, b0, b1, b2, b3, b4; uniform float uS, uR;
+  float lf(float f){ return mix(f, 1.2 - f, uR); }
+  vec3 fit(vec3 v){ vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }
+  void main(){
+    vec3 c = texture(t, uv).rgb;
+    if (uS > 0.0) {
+      vec3 bl = uS * (lf(1.0) * texture(b0, uv).rgb + lf(0.8) * texture(b1, uv).rgb + lf(0.6) * texture(b2, uv).rgb + lf(0.4) * texture(b3, uv).rgb + lf(0.2) * texture(b4, uv).rgb);
+      c += bl * uS * (lf(1.0) + lf(0.8) + lf(0.6) + lf(0.4) + lf(0.2));   // 叠回去时还要再乘一次「强度 × 权重和」
+    }
+    c /= 0.6;
+    c = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777)) * c;
+    c = fit(c);
+    c = clamp(mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602)) * c, 0.0, 1.0);
+    c = mix(pow(c, vec3(0.41666)) * 1.055 - 0.055, c * 12.92, vec3(lessThanEqual(c, vec3(0.0031308))));
+    o = vec4(c, 1.0); }`);
+function 目标(w, h) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, 浮点 ? gl.RGBA16F : gl.RGBA8, w, h, 0, gl.RGBA, 浮点 ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  return {t, f, w, h};
+}
+const 场 = 目标(GW, GH), 横 = [], 竖 = [], 核 = [3, 5, 7, 9, 11];
+let 亮层; { let w = Math.round(GW / 2), h = Math.round(GH / 2); 亮层 = 目标(w, h); for (let i = 0; i < 5; i++) { 横.push(目标(w, h)); 竖.push(目标(w, h)); w = Math.round(w / 2); h = Math.round(h / 2); } }
+const 核权 = 核.map(K => { const a = new Float32Array(11); for (let i = 0; i < K; i++) a[i] = 0.39894 * Math.exp(-0.5 * i * i / (K * K)) / K; return a; });
+const 字层 = document.createElement('canvas'); 字层.width = GW; 字层.height = GH; const 字g = 字层.getContext('2d');
+const 字纹 = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, 字纹);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const 缓 = gl.createBuffer(), 顶点组 = gl.createVertexArray();
+gl.bindVertexArray(顶点组); gl.bindBuffer(gl.ARRAY_BUFFER, 缓);
+for (const [名, 个, 偏] of [['p', 2, 0], ['c', 4, 8]]) { const L = gl.getAttribLocation(形.p, 名); gl.enableVertexAttribArray(L); gl.vertexAttribPointer(L, 个, gl.FLOAT, false, 24, 偏); }
+const 空组 = gl.createVertexArray();
+
+// 颜色：网页色号是「屏幕上的颜色」，先换成线性亮度（才能正确相加、乘倍数），最后调色时再换回来
+const 线性表 = {};
+function 色(hex, k = 1, a = 1) {
+  let c = 线性表[hex];
+  if (!c) { c = 线性表[hex] = [1, 3, 5].map(i => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); }
+  return [c[0] * k, c[1] * k, c[2] * k, a];
+}
+let V = new Float32Array(6 * 60000), n = 0;
+function 顶(x, y, c) { if (n + 6 > V.length) { const B = new Float32Array(V.length * 2); B.set(V); V = B; } V[n++] = x; V[n++] = y; V[n++] = c[0]; V[n++] = c[1]; V[n++] = c[2]; V[n++] = c[3]; }
+function 交(模式) { if (!n) return; gl.bindVertexArray(顶点组); gl.bindBuffer(gl.ARRAY_BUFFER, 缓); gl.bufferData(gl.ARRAY_BUFFER, V.subarray(0, n), gl.STREAM_DRAW); gl.drawArrays(模式, 0, n / 6); n = 0; }
+// 下面的形状都在「逻辑像素」里：x 向右，y 向下。转 = 弧度。sx/sy = 转完以后再横竖拉伸（挤压拉伸用）
+function 点(x, y, a, r, 转, sx, sy) { const dx = Math.cos(a + 转) * r, dy = Math.sin(a + 转) * r; return [x + dx * sx, y + dy * sy]; }
+function 实心(x, y, r, 边, 转, c, sx = 1, sy = 1) {
+  for (let i = 0; i < 边; i++) { const a = i / 边 * Math.PI * 2, b = (i + 1) / 边 * Math.PI * 2;
+    顶(x, y, c); 顶(...点(x, y, a, r, 转, sx, sy), c); 顶(...点(x, y, b, r, 转, sx, sy), c); }
+}
+function 圈(x, y, r0, r1, 边, 转, c, sx = 1, sy = 1) {
+  for (let i = 0; i < 边; i++) { const a = i / 边 * Math.PI * 2, b = (i + 1) / 边 * Math.PI * 2;
+    const p = 点(x, y, a, r0, 转, sx, sy), q = 点(x, y, a, r1, 转, sx, sy), s = 点(x, y, b, r0, 转, sx, sy), t = 点(x, y, b, r1, 转, sx, sy);
+    顶(...p, c); 顶(...q, c); 顶(...t, c); 顶(...p, c); 顶(...t, c); 顶(...s, c); }
+}
+function 条(x, y, 长, 宽, 角, c) {   // 以 (x, y) 为中心、沿「角」方向的长条
+  const ux = Math.cos(角), uy = Math.sin(角), L = 长 / 2, K = 宽 / 2;
+  const P = [[-L, -K], [L, -K], [L, K], [-L, K]].map(([a, b]) => [x + ux * a - uy * b, y + uy * a + ux * b]);
+  顶(...P[0], c); 顶(...P[1], c); 顶(...P[2], c); 顶(...P[0], c); 顶(...P[2], c); 顶(...P[3], c);
+}
+function 椭圆(x, y, rx, ry, 角, c, 段 = 12) {   // rx 沿「角」方向，ry 垂直于它
+  for (let i = 0; i < 段; i++) { const a = i / 段 * Math.PI * 2, b = (i + 1) / 段 * Math.PI * 2, f = t => [x + Math.cos(t) * rx * Math.cos(角) - Math.sin(t) * ry * Math.sin(角), y + Math.cos(t) * rx * Math.sin(角) + Math.sin(t) * ry * Math.cos(角)];
+    顶(x, y, c); 顶(...f(a), c); 顶(...f(b), c); }
+}
+// 伤害飘字的弹簧：从 0 弹到 1，冲过头再回来（阻尼 8、刚度 260、质量 1）
+function 弹簧(t) {
+  const c = 参数.飘字.弹簧阻尼, k = 参数.飘字.弹簧刚度, z = c / 2, wd = Math.sqrt(k - z * z);
+  return 1 - Math.exp(-z * t) * (Math.cos(wd * t) + z / wd * Math.sin(wd * t));
+}
+
+function 画() {
+  const 收 = 收着(), 发 = on.glow ? (收 ? 参数.收着.亮度倍数 : 参数.发光.亮度倍数) : 1;
+  const 泛 = on.glow ? (收 ? 参数.收着.泛光强度 : 参数.发光.泛光强度) : 0;
+  // 震屏：创伤值 = 每次击杀的值 × e^(-衰减×秒) 加起来再封顶；位移按创伤²，用几条快的正弦（按真实时间，顿帧时也在晃）
+  let T = 0; for (const s of 震) T += s.v * Math.exp(-(时 - s.t) * s.衰); T = Math.min(参数.震屏.封顶, T);
+  const 晃x = (T * T * 参数.震屏幅度 * Math.sin(时 * 97) + T * 参数.震屏细抖 * Math.sin(时 * 53)) * 格, 晃y = T * T * 参数.震屏幅度 * Math.cos(时 * 83) * 格, 转 = T * T * 参数.震屏转角 * Math.sin(时 * 61);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, 场.f); gl.viewport(0, 0, GW, GH);
+  const bg = 色('#05060d'); gl.clearColor(bg[0], bg[1], bg[2], 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(形.p); gl.uniform2f(形.u.uSize, W, H); gl.uniform2f(形.u.uCam, 晃x, 晃y); gl.uniform1f(形.u.uRot, 转);
+
+  // ① 背景网格：每格一条线；冲击波经过时把线往外推
+  const 推 = (x, y) => {
+    for (const w of 波) {
+      const a = 游 - w.t, dx = x - w.x, dy = y - w.y, d = Math.hypot(dx, dy) + 1e-3;
+      const R = a * 参数.冲击波.扩散 * Math.sqrt(w.s) * w.缩 * 格, p = w.s * 参数.冲击波.推网格 * w.缩 * 格 * Math.exp(-(((d - R) / (参数.冲击波.推宽 * 格)) ** 2)) * (1 - a / 参数.冲击波.时长);
+      x += dx / d * p; y += dy / d * p;
+    }
+    return [x, y];
+  };
+  const 线色 = [0.12 * (on.glow ? 1.15 : 1), 0.2 * (on.glow ? 1.15 : 1), 0.55 * (on.glow ? 1.15 : 1), 0.8], 半格 = 格 / 2;
+  const x0 = W / 2 - Math.ceil(W / 2 / 格 + 3) * 格, y0 = H / 2 - Math.ceil(H / 2 / 格 + 3) * 格;
+  for (let x = x0; x <= W - x0; x += 格) for (let y = y0; y < H - y0; y += 半格) { 顶(...推(x, y), 线色); 顶(...推(x, y + 半格), 线色); }
+  for (let y = y0; y <= H - y0; y += 格) for (let x = x0; x < W - x0; x += 半格) { 顶(...推(x, y), 线色); 顶(...推(x + 半格, y), 线色); }
+  交(gl.LINES);
+
+  // ② 怪：一圈亮边（内 0.8 外 1）+ 半透明的身体；被打中那一帧整只纯白
+  const 血条 = [];
+  for (const e of 敌) {
+    const [x, y] = 位(e);
+    let 扁 = 0; if (on.squash) { for (const h of e.击) { const a = 游 - h.t; if (a < 0.6) 扁 += Math.exp(-a * 参数.挤压.衰减) * (h.暴 ? 参数.挤压.暴击 : 参数.挤压.普通); } 扁 = Math.min(参数.挤压.封顶, 扁); }
+    const sx = 1 + 扁 * 参数.挤压.横胖, sy = 1 - 扁 * 参数.挤压.竖扁;
+    const 白 = on.flash && 游 - e.白 < 参数.闪白.时长;
+    const 角 = -((e.k === '大' ? 游 * 0.6 : 游 * 1.4 + e.ph) * (e.k === '中' ? 0.5 : 1) + (e.k === '大' ? Math.PI / 4 : 0));
+    const 边色 = 白 ? 色('#ffffff', 发 * 参数.闪白.亮) : 色(e.色, 发);
+    实心(x, y, e.r * 0.8, e.边, 角, 白 ? 色('#ffffff', 发, 0.95) : 色(e.色, 0.6, 0.22), sx, sy);
+    圈(x, y, e.r * 0.8, e.r, e.边, 角, 边色, sx, sy);
+    if (e.k === '大') 圈(x, y, e.r * 0.36, e.r * 0.48, 4, 游 * 1.5, 白 ? 边色 : 色(e.色, 发), sx, sy);
+    if (e.k === '大') 血条.push([x, y - 1.35 * 格, e.hp / e.hpMax]);
+  }
+  // ③ 飞船：三角形亮边；开枪那一下往后一缩、压扁一点
+  const 后 = on.squash ? 船.后坐强 * Math.exp(-(游 - 船.枪时) * 参数.后坐.衰减) : 0, 船y = 船.y + 后 * 参数.后坐.下移 * 格;
+  const 船r = 0.75 * 格, ssx = 1 + 后 * 参数.后坐.横胖, ssy = 1 - 后 * 参数.后坐.竖扁;
+  实心(船.x, 船y, 船r * 0.8, 3, -Math.PI / 2, 色('#5ad8ff', 0.6, 0.25), ssx, ssy);
+  圈(船.x, 船y, 船r * 0.8, 船r * 1.02, 3, -Math.PI / 2, 色('#5ad8ff', 发), ssx, ssy);
+  // ④ 子弹：亮黄的头 + 往后拖的光；枪口火光只亮 0.045 秒、颜色 ×3
+  for (const b of 弹) {
+    const a = 游 - b.生, 角 = Math.atan2(b.vy, b.vx);
+    if (b.种 === '散弹') {
+      const 淡 = 1 - a / b.寿 * 0.6;
+      if (on.trail) 条(b.x - Math.cos(角) * 0.3 * 格, b.y - Math.sin(角) * 0.3 * 格, 0.6 * 格, 0.12 * 格, 角, 色(b.色, 发 * 0.8, 0.6 * 淡));
+      椭圆(b.x, b.y, 0.12 * 格, 0.12 * 格, 0, 色('#ffe2c0', 发 * 1.2, 淡), 8);
+      continue;
+    }
+    if (b.种 === '导弹') {
+      if (on.trail) b.迹.forEach(([x, y], i) => 椭圆(x, y, (0.05 + i / b.迹.length * 0.09) * 格, (0.05 + i / b.迹.length * 0.09) * 格, 0, 色(b.色, 发, i / b.迹.length * 0.7), 8));
+      条(b.x, b.y, 0.37 * 格, 0.16 * 格, 角, 色('#ffffff', 发)); 条(b.x - Math.cos(角) * 0.22 * 格, b.y - Math.sin(角) * 0.22 * 格, 0.1 * 格, 0.1 * 格, 角, 色(b.色, 发 * 1.4));
+      continue;
+    }
+    if (on.trail) {
+      const L = Math.min(参数.子弹.尾长, a * 30) * 格;
+      条(b.x - Math.cos(角) * L / 2, b.y - Math.sin(角) * L / 2, L, 参数.子弹.尾宽 * 格, 角, 色(b.色 === '#ffe066' ? '#ffe066' : b.色, 发 * 0.7, 0.55));
+      椭圆(b.x, b.y, 参数.子弹.头长 * 格, 参数.子弹.头宽 * 格, 角, 色('#fff1a0', 发 * 1.2), 10);
+    } else 椭圆(b.x, b.y, 0.13 * 格, 0.13 * 格, 0, 色('#fff1a0', 发 * 1.2), 10);
+  }
+  const 火 = 游 - 船.枪时;
+  if (on.trail && 火 < 参数.枪口火光.时长 && 武 !== '激光') {
+    const k = 0.9 * (1 - 火 / 参数.枪口火光.时长) + 0.3, r = 参数.枪口火光.大小 * 格;
+    椭圆(船.x, 船y - 0.75 * 格, r * k * 船.火光强, r * 0.5, -Math.PI / 2, 色('#fff3b0', 参数.枪口火光.亮 * 船.火光强), 12);
+  }
+  // 激光：宽度一直轻轻抖，打中时再粗一下，接触点一团亮
+  if (激光端 !== null) {
+    const 枪 = 参数.武器.激光, w = 枪.宽 * 格 * (0.8 + 0.25 * Math.sin(时 * 70) + (游 - 上次中 < 0.05 ? 0.3 : 0)), 长 = 船.y - 26 - 激光端;
+    条(船.x, 激光端 + 长 / 2, 长, w * 1.8, Math.PI / 2, 色(枪.色, 发, 0.7));
+    条(船.x, 激光端 + 长 / 2, 长, w * 0.45, Math.PI / 2, 色('#ffffff', 发 * 1.2));
+    if (激光端 > 0) 椭圆(船.x, 激光端, w * (1 + Math.random() * 0.5), w * (1 + Math.random() * 0.5), 0, 色('#ffffff', 发 * 1.5), 12);
+    if (on.trail) 椭圆(船.x, 船y - 0.75 * 格, 0.3 * 格, 0.2 * 格, 0, 色(枪.色, 2), 12);
+  }
+  // 电磁炮：一条贯穿全屏的光，先白后淡、越来越细
+  for (const l of 光束) {
+    const a = (游 - l.t) / 0.35, w = (12 * (1 - a) ** 2 + 1);
+    条(l.x, (船.y - 20) / 2, 船.y - 20, w * 2, Math.PI / 2, 色('#9fd8ff', 发, 0.6 * (1 - a)));
+    条(l.x, (船.y - 20) / 2, 船.y - 20, w * 0.5, Math.PI / 2, 色('#ffffff', 发 * 1.5, 1 - a));
+  }
+  // ⑤ 冲击波：白色圆环，越扩越淡
+  for (const w of 波) {
+    const a = 游 - w.t, R = (0.3 + a * 参数.冲击波.扩散 * Math.sqrt(w.s) * w.缩) * 格, 宽 = (参数.冲击波.环宽 + w.s * 参数.冲击波.环宽每大小) * 格;
+    圈(w.x, w.y, Math.max(0.5, R - 宽), R, 48, 0, 色('#ffffff', 发 * 0.8, 参数.冲击波.不透明 * (1 - a / 参数.冲击波.时长) ** 1.5));
+  }
+  // ⑥ 火花（细长条，往回溅）和碎片（带阻力越飞越慢、会转）
+  for (const p of 火花) {
+    const a = 游 - p.t, 寿 = 参数.命中火花.寿, L = (参数.命中火花.长 * (1 - a / 寿) + 0.05) * 格;
+    条(p.x + Math.cos(p.a) * p.v * a, p.y + Math.sin(p.a) * p.v * a, L, 参数.命中火花.宽 * 格, p.a, 色(p.暴 ? '#ffffff' : p.色, 发 * 1.3, 1 - a / 寿));
+  }
+  for (const p of 碎片) {
+    const a = 游 - p.t, k = 参数.碎片.阻力, d = p.v / k * (1 - Math.exp(-k * a)), u = a / p.寿, s = p.s * (1 - u);
+    条(p.x + Math.cos(p.a) * d, p.y + Math.sin(p.a) * d, s, s * 0.6, a * 参数.碎片.转 + p.转, 色(p.色, 发 * 1.2, 1 - u * u));
+  }
+  // ⑦ 大怪血条（基础界面，一直都有）
+  for (const [x, y, hp] of 血条) { 条(x, y, 3.2 * 格, 0.22 * 格, 0, 色('#222233')); const w = 3.2 * 格 * Math.max(0, hp); 条(x - 1.6 * 格 + w / 2, y, w, 0.22 * 格, 0, 色('#ff4d5a', 发 * 0.8)); }
+  // ⑧ 金色光点：先往外一甩，再沿弧线飞进分数栏
+  for (const p of 光点) {
+    const u = (游 - p.t) / 参数.光点.飞行; if (u < 0) continue; const e2 = u * u, arc = Math.sin(u * Math.PI);
+    const [tx, ty] = 分数位置(), x = p.x0 + p.ox * arc + (tx - p.x0) * e2, y = p.y0 + p.oy * arc + (ty - p.y0) * e2;
+    椭圆(x, y, 参数.光点.大小 * 格, 参数.光点.大小 * 格, 0, 色('#ffc84a', 发 * 1.4), 10);
+  }
+  // ⑨ 武器升级：一圈新武器颜色的光环从飞船扩开
+  const 升 = 时 - 升时;
+  if (升 < 0.7) { const a = 升 / 0.7, R = 20 + 520 * (1 - (1 - a) ** 3), w = 8 * (1 - a) + 2; 圈(船.x, 船.y, R - w / 2, R + w / 2, 64, 0, 色(参数.武器[武].色, 发 * 1.3, 1 - a)); }
+  交(gl.TRIANGLES);
+
+  // ⑩ 伤害飘字：先画在一张透明画布上，再贴进同一张画面（白字够亮，也会微微发光）
+  if (字.length) {
+    字g.setTransform(1, 0, 0, 1, 0, 0); 字g.clearRect(0, 0, GW, GH);
+    字g.setTransform(倍, 0, 0, 倍, 0, 0); 字g.translate(W / 2, H / 2); 字g.rotate(转); 字g.translate(-W / 2 + 晃x, -H / 2 + 晃y);
+    字g.textAlign = 'center'; 字g.textBaseline = 'middle'; 字g.lineJoin = 'round';
+    const F = 参数.飘字;
+    for (const q of 字) {
+      const a = 游 - q.t, k = 弹簧(Math.round(a * 60) / 60), 大 = q.暴 ? F.暴击放大 : 1, 抖 = q.暴 && a < F.暴击抖 ? F.抖幅 * 格 : 0;
+      const x = q.x + 抖 * Math.sin(时 * 140), y = q.y - a * F.上飘 * 格 + 抖 * Math.cos(时 * 120);
+      字g.globalAlpha = 1 - Math.min(1, Math.max(0, (a - F.开始淡) / (F.时长 - F.开始淡)));
+      字g.save(); 字g.translate(x, y); 字g.scale(大 * k, 大 * k);
+      字g.font = `900 ${F.字高 * 格}px system-ui,"Noto Sans SC",sans-serif`; 字g.lineWidth = F.字高 * 格 * 0.17; 字g.strokeStyle = '#0a0612';
+      字g.strokeText(q.文, 0, 0); 字g.fillStyle = q.暴 ? '#ff4d3a' : '#ffffff'; 字g.fillText(q.文, 0, 0); 字g.restore();
+    }
+    字g.globalAlpha = 1;
+    gl.bindTexture(gl.TEXTURE_2D, 字纹); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, 字层);
+    gl.useProgram(贴字.p); gl.uniform1i(贴字.u.t, 0); gl.bindVertexArray(空组); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  gl.disable(gl.BLEND);
+
+  // 泛光：取亮 → 5 层越来越小、越来越糊
+  gl.bindVertexArray(空组); gl.activeTexture(gl.TEXTURE0);
+  const 过 = (prog, dst, src) => { gl.bindFramebuffer(gl.FRAMEBUFFER, dst.f); gl.viewport(0, 0, dst.w, dst.h); gl.bindTexture(gl.TEXTURE_2D, src.t); gl.uniform1i(prog.u.t, 0); gl.drawArrays(gl.TRIANGLES, 0, 3); };
+  if (泛 > 0) {
+    gl.useProgram(取亮.p); gl.uniform1f(取亮.u.uTh, 参数.发光.门槛); 过(取亮, 亮层, 场);
+    gl.useProgram(糊.p); let 入 = 亮层;
+    for (let i = 0; i < 5; i++) {
+      gl.uniform2f(糊.u.uInv, 1 / 横[i].w, 1 / 横[i].h); gl.uniform1i(糊.u.uK, 核[i]); gl.uniform1fv(糊.u.uW, 核权[i]);
+      gl.uniform2f(糊.u.uDir, 1, 0); 过(糊, 横[i], 入);
+      gl.uniform2f(糊.u.uDir, 0, 1); 过(糊, 竖[i], 横[i]);
+      入 = 竖[i];
+    }
+  }
+  // 叠回去 + 电影式调色 → 屏幕
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, GW, GH); gl.useProgram(出图.p);
+  ['t', 'b0', 'b1', 'b2', 'b3', 'b4'].forEach((名, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, i ? 竖[i - 1].t : 场.t); gl.uniform1i(出图.u[名], i); });
+  gl.uniform1f(出图.u.uS, 泛); gl.uniform1f(出图.u.uR, 参数.发光.泛光半径);
+  gl.drawArrays(gl.TRIANGLES, 0, 3); gl.activeTexture(gl.TEXTURE0);
+
+  屏.setTransform(1, 0, 0, 1, 0, 0); 屏.globalAlpha = 1; 屏.drawImage(glc, 0, 0);
+  界面(收);
+}
+
+// ================= 界面：暗角、分数、连击、升级大字、经验条（不发光、不跟着震） =================
+const 暗角 = (() => { const c = document.createElement('canvas'); c.width = GW; c.height = GH; const x = c.getContext('2d');
+  x.translate(GW / 2, GH / 2); x.scale(1, GH / GW);   // 椭圆：55% 以内不压，往外压到 0.55 黑
+  const r = GW / 2 * Math.SQRT2, gr = x.createRadialGradient(0, 0, 0, 0, 0, r); gr.addColorStop(0.55, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,0.55)');
+  x.fillStyle = gr; x.fillRect(-GW, -GW * 2, GW * 2, GW * 4); return c; })();
+const 分数位置 = () => [(70 + 74 + 50) / 倍, (92 - 18) / 倍];   // 光点飞向的地方（逻辑像素）
+function 界面(收) {
+  const g = 屏, 加 = on.combo;
+  g.drawImage(暗角, 0, 0);
+  // 分数：打死后等光点飞到（0.45 秒），再用 0.35 秒匀速滚上去
+  let 分 = 底分, 到 = null;
+  for (const q of 杀分) {
+    if (q.t > 游) continue;
+    const p = 加 ? Math.min(1, Math.max(0, (游 - q.t - 参数.分数.等) / 参数.分数.滚)) : 1; 分 += q.值 * p;
+    if (游 - q.t >= 参数.分数.等) 到 = q;
+  }
+  const 弹 = 加 && 到 ? Math.exp(-(游 - 到.t - 参数.分数.等) * 10) : 0;
+  g.save(); g.translate(70, 92); g.scale(1 + 弹 * 0.3, 1 + 弹 * 0.3); g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  g.font = '800 30px system-ui,sans-serif'; g.fillStyle = 'rgba(255,255,255,0.6)'; g.fillText('分数', 0, 0);
+  g.font = 'italic 900 52px system-ui,sans-serif'; g.fillStyle = '#fff';
+  if (加) { g.shadowColor = 'rgba(255,200,74,0.8)'; g.shadowBlur = 10 + 弹 * 20; }
+  g.fillText(Math.round(分).toLocaleString('en-US'), 74, 0); g.restore();
+  // 连击：字号随连击变大（60 + 连击，最多 100），颜色从黄变红，每打中一下猛一放大、歪一下
+  if (加 && 连击 > 1 && 游 - 上次中 < 参数.连击断开) {
+    const 热 = Math.min(1, 连击 / 50), 跳 = Math.exp(-(游 - 上次中) * 14);
+    g.save(); g.translate(GW - 50, 92); g.scale(1 + 跳 * 0.35, 1 + 跳 * 0.35); g.rotate(-跳 * 6 * Math.PI / 180);
+    g.textAlign = 'right'; g.font = `italic 900 ${60 + Math.min(40, 连击)}px system-ui,sans-serif`;
+    g.shadowColor = 'rgba(0,0,0,0.8)'; g.shadowBlur = 10; g.shadowOffsetY = 4; g.fillStyle = '#000'; g.fillText('连击 ×' + 连击, 0, 0);
+    g.shadowColor = 'rgba(255,120,60,0.7)'; g.shadowBlur = 18; g.shadowOffsetY = 0;
+    g.fillStyle = `rgb(255,${Math.round(230 - 150 * 热)},${Math.round(120 - 80 * 热)})`; g.fillText('连击 ×' + 连击, 0, 0); g.restore();
+  }
+  g.setTransform(倍, 0, 0, 倍, 0, 0);
+  // 升级庆祝：屏幕轻闪 + 中间大字弹出
+  const 升 = 时 - 升时, 色号 = 参数.武器[武].色;
+  if (升 < 0.25) { g.fillStyle = `rgba(255,255,255,${0.28 * (1 - 升 / 0.25)})`; g.fillRect(0, 0, W, H); }
+  if (升 < 参数.进阶.庆祝时长) {
+    const a = 升 / 参数.进阶.庆祝时长, p = Math.min(1, 升 / 0.18), 弹2 = p < 1 ? 1 + 2.2 * (p - 1) ** 2 + 3.2 * (p - 1) ** 3 : 1;
+    g.save(); g.translate(W / 2, H * 0.42); g.scale(弹2, 弹2); g.globalAlpha = a > 0.75 ? 1 - (a - 0.75) / 0.25 : 1;
+    g.textAlign = 'center'; g.lineJoin = 'round';
+    g.font = '900 20px system-ui,sans-serif'; g.lineWidth = 6; g.strokeStyle = '#0a0612'; g.strokeText(升名, 0, -34); g.fillStyle = '#fff'; g.fillText(升名, 0, -34);
+    g.font = '900 54px system-ui,sans-serif'; g.lineWidth = 8; g.strokeText(武, 0, 22);
+    g.shadowColor = 色号; g.shadowBlur = 26; g.fillStyle = 色号; g.fillText(武, 0, 22);
+    g.restore();
+  }
+  // 经验条（底部）：攒到哪了、下一把是什么，让人有盼头
+  g.textAlign = 'left'; g.font = '900 13px system-ui,sans-serif';
+  if (自动.checked) {
+    const 满 = 级 >= 枪名.length - 1, 比 = 满 ? 1 : 经验 / 参数.进阶.升级所需[级], x0 = 20, x1 = W - 20, y = H - 24;
+    g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(x0, y, x1 - x0, 6);
+    g.save(); g.fillStyle = 色号; g.shadowColor = 色号; g.shadowBlur = 10; g.fillRect(x0, y, (x1 - x0) * 比, 6); g.restore();
+    g.fillStyle = 'rgba(255,255,255,0.75)'; g.fillText(`Lv${级 + 1} ${武}`, x0, y - 7);
+    g.textAlign = 'right'; g.fillText(满 ? '满级！' : `下一把：${枪名[级 + 1]}`, x1, y - 7);
+  } else { g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillText(`手动：${武}`, 20, H - 30); }
+  if (顿 > 0) { g.textAlign = 'left'; g.font = '12px system-ui'; g.fillStyle = '#888'; g.fillText('顿帧中', 20, H - 6); }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+}
+换武器('机枪', true);
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

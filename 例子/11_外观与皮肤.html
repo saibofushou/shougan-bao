@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>11 外观与皮肤 · 小例子</title>
+<style>
+:root{--bg:#0a0705;--panel:rgba(22,15,9,.88);--line:#5a4020;--txt:#f3e6cf;--dim:#b09a7a;--acc:#ffc84a;--gold:#e8b44a}
+*{box-sizing:border-box}
+/* 深棕黑底 + 中间一团暖金光 + 很淡的方格 */
+body{margin:0;color:var(--txt);font:14px/1.5 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;padding:12px;min-height:100vh;
+  background:linear-gradient(rgba(255,200,120,.035) 1px,transparent 1px) 0 0/32px 32px,linear-gradient(90deg,rgba(255,200,120,.035) 1px,transparent 1px) 0 0/32px 32px,radial-gradient(ellipse at 50% 35%,#3a2410,#140c06 55%,var(--bg))}
+body>*{max-width:1040px;margin-left:auto;margin-right:auto}
+h1{font-size:20px;margin:4px auto;font-weight:900;font-style:italic;color:#ffe2a0;text-shadow:0 0 12px rgba(255,180,60,.45)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px auto}.tabs button{flex:1;min-width:110px}
+button,select{background:linear-gradient(#2a1d10,#170f08);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:14px;font-weight:700}
+button:hover,button.on{border-color:var(--gold);box-shadow:0 0 12px rgba(255,190,80,.45)}
+button.on{background:linear-gradient(#5a3c14,#2a1a08);color:#ffe2a0}
+.page{display:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:inset 0 0 40px rgba(255,170,60,.06),0 0 30px rgba(0,0,0,.6)}.page.on{display:block}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
+.dim{color:var(--dim);font-size:12px}
+.wrap{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+input[type=checkbox]{accent-color:#e8b44a}
+/* 装备卡：金色细框 + 稀有度颜色的外发光 */
+.card{width:300px;max-width:100%;background:linear-gradient(#22170c,#0f0a06);border:2px solid var(--r,#888);outline:1px solid rgba(232,180,74,.35);outline-offset:3px;border-radius:8px;padding:10px 12px;box-shadow:0 0 22px -4px var(--r,#888),inset 0 0 24px rgba(0,0,0,.6)}
+.card .nm{font-size:18px;font-weight:900;font-style:italic;color:var(--r);text-shadow:0 0 10px var(--r)}
+.card .sub{font-size:12px;color:var(--dim)}
+.card .base{font-size:24px;font-weight:800;font-style:italic;margin:4px 0;font-family:"Bahnschrift","Arial Narrow",system-ui,sans-serif;color:#ffe2a0;text-shadow:0 0 10px rgba(255,190,80,.5)}
+.card .ln{font-size:13px;padding:1px 0}
+.card hr{border:0;border-top:1px solid #4a3418;margin:6px 0}
+.bar{height:6px;background:#2a1d10;border-radius:3px;position:relative;margin:2px 0 6px}.bar i{position:absolute;top:-3px;width:3px;height:12px;background:#ffe2a0;box-shadow:0 0 6px #ffc84a}
+.mini{width:150px;font-size:11px;padding:6px 8px}.mini .nm{font-size:13px}.mini .base{font-size:15px}
+.step{opacity:.25;transition:opacity .3s}.step.on{opacity:1}
+#steps div{padding:5px 9px;border-left:3px solid #4a3418;margin:3px 0;border-radius:0 6px 6px 0}
+#steps div.on{border-color:var(--acc);background:linear-gradient(90deg,rgba(255,190,80,.16),rgba(255,190,80,0))}
+.full .ln{line-height:1.35}
+.grp{border-radius:6px;padding:3px 6px;margin:4px 0}
+.out{background:rgba(10,7,4,.7);border:1px solid #3a2810;border-radius:8px;padding:8px 10px;margin:6px 0}
+canvas{width:100%;display:block;background:#120c07;border:1px solid #3a2810;border-radius:8px;box-shadow:inset 0 0 30px rgba(0,0,0,.6)}
+.big{font-size:24px;font-weight:900;font-style:italic;color:var(--acc);text-shadow:0 0 10px rgba(255,190,80,.5)}
+input[type=range]{width:180px;accent-color:#e8b44a}
+label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+</style>
+</head>
+<body>
+<h1>11 外观与皮肤：卖好看可以，卖变强不行</h1>
+<div class="tabs"><button data-t="gun" class="on">① 一把枪的贴纸：磨损 + 图案编号</button><button data-t="tmog">② 幻化：属性和样子分家</button><button data-t="fair">③ 竞技公平：轮廓和颜色</button></div>
+
+<div class="page on" id="p-gun">
+  <div class="row"><button id="gOpen">开一个箱子</button>　磨损 <input type="range" id="gWear" min="0" max="1" step="0.001"> <b id="gWearV"></b>　图案编号 <input type="range" id="gSeed" min="0" max="999" step="1"> <b id="gSeedV"></b></div>
+  <canvas id="gC" width="960" height="330"></canvas>
+  <div class="row"><button id="gScan">把 1000 个图案编号全算一遍</button><button id="gBest">看最蓝的那一把</button><button id="gRule">官方改一条规则</button></div>
+  <div class="out" id="gOut"></div>
+</div>
+
+<div class="page" id="p-tmog">
+  <div class="row">属性用：<select id="tStat"></select>　样子用：<select id="tLook"></select>　<label><input type="checkbox" id="tOn" checked> 允许幻化</label></div>
+  <canvas id="tC" width="960" height="300"></canvas>
+  <div class="out" id="tOut"></div>
+</div>
+
+<div class="page" id="p-fair">
+  <div class="row">皮肤 <select id="fSkin"><option value="0">默认（亮色衣服）</option><option value="1">深绿迷彩（2019 年那种）</option><option value="2">深绿迷彩 + 亮色花纹（改过之后）</option></select>　<label><input type="checkbox" id="fRim"> 加敌人描边</label>　<button id="fHide">换个藏身处</button></div>
+  <canvas id="fC" width="960" height="360"></canvas>
+  <div class="out" id="fOut"></div>
+</div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 磨损档 = [   // 上限, 名字
+  [0.07, '崭新出厂'], [0.15, '略有磨损'], [0.38, '久经沙场'], [0.45, '破损不堪'], [1.0, '战痕累累']];
+const 皮肤色 = {蓝: [40, 110, 230], 金: [220, 170, 60], 紫: [140, 70, 170]};   // 「淬火」风格的三种斑块
+const 价格 = {基础: 40, 每多一成蓝: 1.9};   // 示意：越蓝越贵，蓝到顶的收藏家抢
+const 幻化装备 = [
+  {名: '新手布甲', 防: 12, 色: '#a08060', 肩: 0, 披风: false},
+  {名: '烈阳板甲', 防: 210, 色: '#c9a24a', 肩: 1, 披风: true},
+  {名: '旧日礼服', 防: 30, 色: '#6a3d8a', 肩: 0, 披风: true},
+];
+// =========================================================
+
+const $ = id => document.getElementById(id);
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t));
+  画全部();
+});
+// 可复现噪声：同一个图案编号，永远是同一块花纹
+function 哈希(x, y, s) { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function 噪(x, y, s) { const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi, u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const a = 哈希(xi, yi, s), b = 哈希(xi + 1, yi, s), c = 哈希(xi, yi + 1, s), d = 哈希(xi + 1, yi + 1, s); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; }
+function 花纹(x, y, 编号) {   // 返回 '蓝' / '金' / '紫'；编号决定花纹在大贴图上取哪一块
+  const ox = (编号 * 7.31) % 40, oy = (编号 * 3.17) % 25;
+  const n = 噪(x / 60 + ox, y / 60 + oy, 1) * 0.65 + 噪(x / 22 + ox, y / 22 + oy, 2) * 0.35;
+  return n > 0.53 ? '蓝' : n > 0.4 ? '紫' : '金';
+}
+// 枪的轮廓（一条多边形），在 960×330 的画布上
+const 枪 = [[90, 150], [520, 140], [560, 128], [800, 128], [800, 150], [880, 150], [880, 168], [610, 172], [600, 210], [560, 300], [510, 300], [535, 205], [460, 190], [430, 250], [380, 250], [400, 190], [250, 195], [150, 250], [80, 250], [100, 200]];
+function 在枪里(x, y) { let c = false; for (let i = 0, j = 枪.length - 1; i < 枪.length; j = i++) { const [xi, yi] = 枪[i], [xj, yj] = 枪[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; }
+const 采样点 = []; for (let y = 120; y < 305; y += 6) for (let x = 75; x < 885; x += 6) if (在枪里(x, y)) 采样点.push([x, y]);
+const 蓝度 = 编号 => 采样点.filter(([x, y]) => 花纹(x, y, 编号) === '蓝').length / 采样点.length;
+const 档名 = w => 磨损档.find(([上]) => w <= 上)[1];
+let 全表 = null, 规则改了 = false;
+function 估价(编号, 磨) {
+  const b = 蓝度(编号); let p = 价格.基础 * Math.pow(价格.每多一成蓝, b * 10) * (1.6 - 磨);
+  if (全表) { const 名次 = 全表.filter(x => x > b).length; if (名次 === 0) p *= 规则改了 ? 8 : 400; else if (名次 < 5) p *= 规则改了 ? 2 : 20; }
+  return Math.round(p);
+}
+function 画枪() {
+  const cv = $('gC'), g = cv.getContext('2d'), W = cv.width, H = cv.height, 磨 = +$('gWear').value, 编号 = +$('gSeed').value;
+  $('gWearV').textContent = `${磨.toFixed(3)}（${档名(磨)}）`; $('gSeedV').textContent = '#' + 编号;
+  const img = g.createImageData(W, H), d = img.data;
+  for (let k = 0; k < d.length; k += 4) { const px = k / 4 % W, py = k / 4 / W | 0, r0 = Math.hypot(px - W / 2, (py - H / 2) * 1.6) / W; const v = Math.max(0, 1 - r0 * 1.6); d[k] = 18 + 46 * v; d[k + 1] = 12 + 28 * v; d[k + 2] = 7 + 10 * v; d[k + 3] = 255; if (px % 32 === 0 || py % 32 === 0) { d[k] += 8; d[k + 1] += 6; d[k + 2] += 3; } }   // 暖色暗底 + 淡方格
+  for (let y = 110; y < 310; y++) for (let x = 70; x < 890; x++) {
+    if (!在枪里(x, y)) continue;
+    let [r, gg, b] = 皮肤色[花纹(x, y, 编号)];
+    const 刮 = 噪(x / 4, y / 4, 9) < 磨 * 0.9 && 噪(x / 30, y / 30, 5) < 磨 * 1.4;   // 磨损：露出底下的灰铁
+    if (刮) { r = gg = b = 120 + 噪(x, y, 3) * 30; }
+    const 暗 = 1 - 磨 * 0.35 + (y < 160 ? 0.15 : 0);
+    const k = (y * W + x) * 4; d[k] = r * 暗; d[k + 1] = gg * 暗; d[k + 2] = b * 暗; d[k + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  g.strokeStyle = '#000'; g.lineWidth = 2; g.beginPath(); 枪.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.stroke();
+  g.fillStyle = '#f3e6cf'; g.font = '700 14px system-ui';
+  g.fillText(`伤害 36　射速 600/分　（换皮肤，这两个数永远不变）`, 20, 30);
+  g.fillText(`蓝色占 ${(蓝度(编号) * 100).toFixed(1)}%　估价 ≈ ¥${估价(编号, 磨).toLocaleString()}`, 20, 52);
+}
+$('gWear').oninput = 画枪; $('gSeed').oninput = 画枪;
+$('gOpen').onclick = () => { $('gWear').value = Math.random(); $('gSeed').value = Math.floor(Math.random() * 1000); 画枪(); $('gOut').innerHTML = '开箱：随机两样东西——<b>磨损</b>（0～1，决定新旧档位和刮痕）和<b>图案编号</b>（0～999，决定花纹在大贴图上取哪一块）。'; };
+$('gScan').onclick = () => {
+  全表 = Array.from({length: 1000}, (_, i) => 蓝度(i)); const 排 = [...全表].sort((a, b) => b - a), 中 = 排[500], 最 = 全表.indexOf(排[0]);
+  $('gOut').innerHTML = `1000 个图案编号：一半的枪蓝色不到 <b>${(中 * 100).toFixed(0)}%</b>；最蓝的是 <b>#${最}</b>，蓝色 ${(排[0] * 100).toFixed(0)}%，全世界只有这一个编号。<br>
+    <span class="dim">真实的游戏里，有一个编号恰好让枪身几乎全蓝，2024 年这样一把以超过 100 万美元（约 674 万人民币）成交；同款大多数只值几十块。值钱的不是贴图，是稀有。</span>`; 画枪(); };
+$('gBest').onclick = () => { if (!全表) $('gScan').click(); $('gSeed').value = 全表.indexOf(Math.max(...全表)); $('gWear').value = 0.01; 画枪(); };
+$('gRule').onclick = () => { if (!全表) $('gScan').click(); 规则改了 = !规则改了; $('gRule').textContent = 规则改了 ? '改回来' : '官方改一条规则'; 画枪();
+  $('gOut').innerHTML += 规则改了 ? '<br><b style="color:#ff6b7a">规则一改，稀有的东西能「合成」出来了：稀有没了，价格跟着塌。</b>（真实事件：一条合成规则改动，一天内整个皮肤市场蒸发约 17 亿美元）' : ''; };
+
+// ② 幻化
+幻化装备.forEach((z, i) => { $('tStat').add(new Option(`${z.名}（防御 ${z.防}）`, i)); $('tLook').add(new Option(z.名, i)); });
+$('tStat').value = 1; $('tLook').value = 2;
+function 画人(g, x, 装, 标) {
+  g.save(); g.translate(x, 250);
+  if (装.披风) { g.fillStyle = '#7a1f2a'; g.fillRect(-34, -150, 68, 140); }
+  g.fillStyle = '#3d4f7a'; g.fillRect(-22, -60, 18, 60); g.fillRect(4, -60, 18, 60);
+  g.fillStyle = 装.色; g.fillRect(-30, -150, 60, 95);
+  if (装.肩) { g.fillRect(-48, -155, 26, 22); g.fillRect(22, -155, 26, 22); }
+  g.fillStyle = '#f0c8a0'; g.fillRect(-16, -190, 32, 36);
+  g.restore(); g.fillStyle = '#f3e6cf'; g.font = '700 14px system-ui'; g.textAlign = 'center'; g.fillText(标, x, 285); g.textAlign = 'left';
+}
+function 画幻化() {
+  const cv = $('tC'), g = cv.getContext('2d'); { const 底 = g.createRadialGradient(cv.width / 2, cv.height * 0.45, 0, cv.width / 2, cv.height * 0.45, cv.width * 0.6); 底.addColorStop(0, '#3a2410'); 底.addColorStop(1, '#100a05'); g.fillStyle = 底; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = 'rgba(255,180,90,.12)'; g.beginPath(); g.ellipse(200, 252, 70, 10, 0, 0, 7); g.ellipse(620, 252, 70, 10, 0, 0, 7); g.fill(); }
+  const 属 = 幻化装备[+$('tStat').value], 样 = $('tOn').checked ? 幻化装备[+$('tLook').value] : 属;
+  画人(g, 200, 属, '不幻化：穿什么就长什么样');
+  画人(g, 620, 样, $('tOn').checked ? `幻化：属性「${属.名}」，样子「${样.名}」` : '（幻化已关）');
+  g.fillStyle = '#ffc84a'; g.shadowColor = '#ffb030'; g.shadowBlur = 10; g.font = 'italic 800 20px Bahnschrift,"Arial Narrow",system-ui'; g.fillText(`防御 ${属.防}`, 560, 40); g.fillText(`防御 ${属.防}`, 150, 40); g.shadowBlur = 0;
+  $('tOut').innerHTML = `两个人的<b>防御一样</b>（都来自「${属.名}」），只是样子不同。2011 年魔兽世界上线「幻化」：属性用身上这件，样子换成另一件——<b>变强和好看，从此正式分家</b>。<br>
+    <span class="dim">关掉幻化：想要好看就得穿弱装备，玩家只能二选一。</span>`;
+}
+['tStat', 'tLook', 'tOn'].forEach(id => $(id).onchange = 画幻化);
+
+// ③ 竞技公平
+let 藏 = {x: 600, y: 220};
+function 画公平() {
+  const cv = $('fC'), g = cv.getContext('2d'), W = cv.width, H = cv.height, 皮 = +$('fSkin').value;
+  const img = g.createImageData(W, H), d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const n = 噪(x / 18, y / 18, 4) * 0.6 + 噪(x / 5, y / 5, 6) * 0.4, k = (y * W + x) * 4;
+    d[k] = 40 + n * 50; d[k + 1] = 80 + n * 70; d[k + 2] = 35 + n * 35; d[k + 3] = 255; }   // 绿色草地
+  g.putImageData(img, 0, 0);
+  // 敌人（蹲着的小人），皮肤决定颜色
+  const 色 = 皮 === 0 ? ['#3c78d8', '#f0c8a0'] : ['#3f6a35', '#4a6a3a'];
+  g.save(); g.translate(藏.x, 藏.y);
+  if ($('fRim').checked) { g.shadowColor = '#ff3b3b'; g.shadowBlur = 0; g.strokeStyle = '#ff3b3b'; g.lineWidth = 3; g.strokeRect(-17, -37, 34, 54); }
+  g.fillStyle = 色[0]; g.fillRect(-15, -20, 30, 35); g.fillStyle = 色[1]; g.fillRect(-10, -35, 20, 16);
+  if (皮 === 2) { g.fillStyle = '#ffd23c'; g.fillRect(-15, -8, 30, 5); g.fillRect(-10, -30, 20, 3); }   // 亮色花纹
+  g.restore();
+  // 看得清度：小人颜色和周围草地的平均色差
+  const 草 = [55, 105, 50], 人 = 皮 === 0 ? [60, 120, 216] : [63, 106, 53];
+  let 差 = Math.hypot(人[0] - 草[0], 人[1] - 草[1], 人[2] - 草[2]); if (皮 === 2) 差 += 70; if ($('fRim').checked) 差 += 120;
+  $('fOut').innerHTML = `看得清度（示意：身体和草地的色差，亮色花纹 +70、描边 +120）：<span class="big">${Math.round(差)}</span>　${差 < 40 ? '<b style="color:#ff6b7a">几乎看不见：穿这套等于开挂</b>' : '看得清'}<br>
+    <span class="dim">2019 年 CS 第一次能换人物皮肤，几套深绿色的蹲在绿地图里几乎看不见，职业赛事禁用，官方只好加亮色花纹。从此竞技游戏做皮肤：<b>轮廓要清楚，颜色不能和地图混在一起</b>。只卖外观，也得管「看不看得见」。</span>`;
+}
+$('fSkin').onchange = 画公平; $('fRim').onchange = 画公平;
+$('fHide').onclick = () => { 藏 = {x: 80 + Math.random() * 800, y: 80 + Math.random() * 240}; 画公平(); };
+
+function 画全部() { 画枪(); 画幻化(); 画公平(); }
+$('gWear').value = 0.2; $('gSeed').value = 412; 画全部();
+</script>
+</body>
+</html>

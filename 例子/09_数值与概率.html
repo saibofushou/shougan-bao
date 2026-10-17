@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>09 数值与概率 · 小例子</title>
+<style>
+:root{--ink:#4a1f5c;--panel:#fffaff;--line:#4a1f5c;--txt:#4a1f5c;--dim:#8a6a96;--acc:#ff2f78;--ok:#1fae5a;--bad:#ff2f78}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 50% 30%,#fbf6ff,#dcc7ff 60%,#c4a8ff);color:var(--txt);font:14px/1.55 system-ui,'PingFang SC','Microsoft YaHei',sans-serif;padding:12px;min-height:100vh}
+body>*{max-width:1000px;margin-left:auto;margin-right:auto}
+h1{font-size:20px;margin:4px auto;font-weight:900}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px auto}
+.tabs button{flex:1;min-width:100px}
+button{background:#fff;color:var(--ink);border:3px solid var(--ink);border-radius:999px;padding:6px 12px;cursor:pointer;font-size:14px;font-weight:900;box-shadow:0 3px 0 var(--ink)}
+button:hover{background:#ffe3f1}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+button.on{background:#ffd23f}
+.page{display:none;background:var(--panel);border:4px solid var(--ink);box-shadow:0 6px 0 var(--ink);border-radius:18px;padding:14px}
+.page.on{display:block}
+canvas{width:100%;display:block;background:#f6efff;border:3px solid var(--ink);border-radius:12px;margin:8px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
+.big{font-size:24px;font-weight:900;color:var(--acc)}
+.dim{color:var(--dim);font-size:12px}
+label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+input[type=range]{width:160px;accent-color:#ff2f78}
+input[type=checkbox]{accent-color:#ff2f78;width:16px;height:16px}
+.out{background:#f6efff;border:2px solid #d8c4f0;border-radius:12px;padding:8px 12px;margin:6px 0}
+#forge{display:flex;gap:12px;flex-wrap:wrap}
+#forgeL{flex:1 1 300px}#forgeR{flex:1 1 300px}
+.chips{display:flex;gap:6px}.chips div{flex:1;text-align:center;border-radius:999px;padding:4px;background:#fff;border:2px solid var(--ink);font-weight:700}
+#sHit{background:#ff7ab0;color:#fff;text-shadow:0 2px 0 var(--ink)}
+</style>
+</head>
+<body>
+<h1>09 数值与概率：游戏里的数，都是设计出来的</h1>
+<div class="tabs"><button data-t="drop" class="on">① 掉率 1%</button><button data-t="gacha">② 抽卡与保底</button><button data-t="star">③ 强化 15 星</button><button data-t="econ">④ 金币经济</button></div>
+
+<!-- ① 掉率 -->
+<div class="page on" id="p-drop">
+  <div class="row">掉率 <input type="range" id="dRate" min="0.1" max="10" step="0.1" value="1"> <b id="dRateV"></b>　玩家 <input type="range" id="dN" min="100" max="5000" step="100" value="1000"> <b id="dNV"></b> <button id="dRun">重新刷一遍</button></div>
+  <canvas id="dC" width="960" height="300"></canvas>
+  <div class="out" id="dOut"></div>
+</div>
+
+<!-- ② 抽卡 -->
+<div class="page" id="p-gacha">
+  <div class="row"><label><input type="checkbox" id="gSoft" checked> 软保底（73 抽后每抽 +6%）</label><label><input type="checkbox" id="gHard" checked> 硬保底（90 抽必出）</label><label><input type="checkbox" id="gFifty" checked> 一半会「歪」，歪了下次必中</label></div>
+  <div class="row"><button id="g1">抽一次</button><button id="g10">十连</button><button id="gReset">重来</button><span id="gNow"></span></div>
+  <canvas id="gC" width="960" height="300"></canvas>
+  <div class="out" id="gOut"></div>
+</div>
+
+<!-- ③ 强化 -->
+<div class="page" id="p-star">
+  <div id="forge">
+    <div id="forgeL">
+      <canvas id="sC" width="480" height="330"></canvas>
+      <div class="chips"><div>成功 <b id="sOk"></b></div><div>保持/掉星 <b id="sKeep"></b></div><div>碎掉 <b id="sBoom"></b></div></div>
+      <div class="row"><button id="sHit" style="flex:1;padding:12px;font-size:16px">强化！（空格）</button></div>
+      <div class="row"><label><input type="checkbox" id="sDrop"> 旧规则：16 星起失败掉一星（连掉 2 次下次必成）</label></div>
+      <div class="row"><label><input type="checkbox" id="sCatch" checked> 抓星星（按的时候星星在黄区：成功率 ×1.05）</label></div>
+      <div class="row"><label><input type="checkbox" id="sShow" checked> 成功演得长、失败演得短</label></div>
+    </div>
+    <div id="forgeR">
+      <div class="out" id="sStat"></div>
+      <div class="row"><button id="sSim">模拟 2000 个人从 0 点到 22 星</button></div>
+      <div class="out" id="sSimOut">点上面的按钮比较：有掉星 和 没有掉星（2025 年冒险岛删掉了掉星）。</div>
+      <canvas id="sTab" width="480" height="150"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ④ 经济 -->
+<div class="page" id="p-econ">
+  <div class="row">下水道（越有钱花得越多）<input type="range" id="eSink" min="0" max="0.25" step="0.01" value="0.12"> <b id="eSinkV"></b>　工作室刷金 <input type="range" id="eBot" min="0" max="400" step="10" value="150"> <b id="eBotV"></b></div>
+  <canvas id="eC" width="960" height="320"></canvas>
+  <div class="out" id="eOut"></div>
+</div>
+
+<script>
+// ===================== 参数表：改这里 =====================
+const 参数 = {
+  掉率: {默认率: 0.01, 默认人数: 1000},
+  抽卡: {基础: 0.006, 软保底起: 73, 每抽加: 0.06, 硬保底: 90, 歪的概率: 0.5, 一抽多少钱: 16, 模拟人数: 100000},
+  // 冒险岛现行星力成功率（%），第 i 个 = 从 i 星升 i+1 星。碎掉率从 15 星开始（示意取值，按自己的游戏改）
+  强化成功: [95, 90, 85, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 30, 30, 15, 15, 15, 30, 15, 15, 10, 10, 10, 7, 5, 3, 1],
+  强化碎掉: {15: 2.1, 16: 2.1, 17: 6.8, 18: 6.8, 19: 8.5, 20: 10.5, 21: 12.75, 22: 17, 23: 18, 24: 18, 25: 18, 26: 18.6, 27: 19, 28: 19.4, 29: 19.8},
+  碎了回到: 12,
+  掉星起: 16, 不掉星的台阶: [20],   // 旧规则：16 星起失败掉一星，但 20 星是安全台阶         // 碎了留下「痕迹」，换一件同款回到 12 星
+  抓星星加成: 1.05,
+  经济: {人数: 1000, 天数: 60, 每天上架: 40, 拿出来抢的比例: 0.05, 新手日收入: 100, 买药: 25, 拍卖抽成: 0.05, 工作室开始: 20},
+};
+// =========================================================
+
+// 可复现的随机数
+function 种子随机(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const $ = id => document.getElementById(id);
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t));
+});
+// 画柱状图：数组 → 柱子；标记若干条竖线
+const INK = '#4a1f5c';
+const 深色 = {'#5be08a': '#1fae5a', '#ffc84a': '#e08a00', '#ff6b7a': '#ff2f78'};   // 浅底上看得清的颜色
+function 圆角(g, x, y, w, h, r) { r = Math.max(0, Math.min(r, h / 2, w / 2)); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+// 高清屏：画布按设备像素放大，画的时候还用原来的坐标
+function 高清(cv) {
+  if (!cv.W) { const d = Math.min(2, window.devicePixelRatio || 1); cv.W = cv.width; cv.H = cv.height; cv.width = cv.W * d; cv.height = cv.H * d; cv.d = d; }
+  const g = cv.getContext('2d'); g.setTransform(cv.d, 0, 0, cv.d, 0, 0); return g;
+}
+function 柱图(cv, 数, 色, 标 = [], 横名 = '') {
+  const g = 高清(cv), W = cv.W, H = cv.H, L = 40, B = 30;
+  g.clearRect(0, 0, W, H); const 大 = Math.max(...数, 1), w = (W - L - 10) / 数.length;
+  // 糖果柱子：上浅下深、深紫描边
+  const 渐 = g.createLinearGradient(0, 20, 0, H - B); 渐.addColorStop(0, '#ffffff'); 渐.addColorStop(0.18, 色); 渐.addColorStop(1, 色);
+  数.forEach((v, i) => { if (!v) return; const h = v / 大 * (H - B - 20); g.fillStyle = 渐; g.fillRect(L + i * w, H - B - h, Math.max(1, w - 0.5), h); });
+  g.strokeStyle = INK; g.lineWidth = 1.2; 数.forEach((v, i) => { if (!v || w < 5) return; const h = v / 大 * (H - B - 20); g.strokeRect(L + i * w, H - B - h, w - 0.5, h); });
+  g.strokeStyle = INK; g.lineWidth = 3; g.beginPath(); g.moveTo(L, H - B); g.lineTo(W, H - B); g.stroke();
+  g.font = '700 12px system-ui'; g.fillStyle = '#7a5a8a'; g.textAlign = 'center';
+  for (let i = 0; i <= 10; i++) { const k = Math.round(i / 10 * 数.length); g.fillText(k, L + k * w, H - 12); }
+  g.textAlign = 'right'; g.fillText(横名, W - 4, H - 1);
+  for (const [j, [k, 字, c0]] of 标.entries()) {
+    const c = 深色[c0] || c0;
+    g.strokeStyle = c; g.lineWidth = 2; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(L + k * w, 10); g.lineTo(L + k * w, H - B); g.stroke(); g.setLineDash([]);
+    g.font = '900 13px system-ui,"Microsoft YaHei"'; const tw = g.measureText(字).width;
+    g.fillStyle = '#fff'; 圆角(g, L + k * w + 4, 10 + j * 20, tw + 14, 18, 9); g.fill(); g.strokeStyle = c; g.lineWidth = 2; g.stroke();
+    g.fillStyle = c; g.textAlign = 'left'; g.fillText(字, L + k * w + 11, 23 + j * 20);
+  }
+}
+// ================= ① 掉率 =================
+function 掉率() {
+  const p = +$('dRate').value / 100, N = +$('dN').value, r = 种子随机(Math.random() * 1e9);
+  $('dRateV').textContent = (p * 100).toFixed(1) + '%'; $('dNV').textContent = N;
+  const 第几刀 = [];
+  for (let i = 0; i < N; i++) { let k = 1; while (r() >= p) k++; 第几刀.push(k); }
+  const 均 = Math.round(1 / p), 宽 = 均 * 5, 桶 = new Array(100).fill(0);
+  for (const k of 第几刀) 桶[Math.min(99, Math.floor((k - 1) / 宽 * 100))]++;
+  const 到 = n => 第几刀.filter(k => k <= n).length, 最倒霉 = Math.max(...第几刀);
+  柱图($('dC'), 桶, '#ffc84a', [[100 / 5, `平均 ${均} 刀`, '#5be08a']], `第几刀出货（到 ${宽} 刀，后面的堆在最右）`);
+  const 九九 = Math.ceil(Math.log(0.01) / Math.log(1 - p));
+  $('dOut').innerHTML = `打 ${均} 刀出了货的：<span class="big">${到(均)}</span> / ${N} 人（理论 ${(100 - Math.pow(1 - p, 均) * 100).toFixed(0)}%）。
+    打了 ${均 * 3} 刀还没出的：${N - 到(均 * 3)} 人。最倒霉的一个打了 <b>${最倒霉}</b> 刀。<br>
+    算法：每一刀不出 = ${(1 - p).toFixed(3)}；连续 n 刀都不出 = ${(1 - p).toFixed(3)}<sup>n</sup>。要有 99% 的把握，得打 <b>${九九}</b> 刀。<br>
+    <span class="dim">所以「1%」不是一百刀必出，只是平均一百刀一次。运气差的人，靠保底兜底（见 ② 抽卡）。</span>`;
+}
+['dRate', 'dN'].forEach(id => $(id).oninput = 掉率); $('dRun').onclick = 掉率;
+
+// ================= ② 抽卡 =================
+const 抽 = 参数.抽卡;
+function 本抽概率(k) {   // 距上次出货第 k 抽
+  if ($('gHard').checked && k >= 抽.硬保底) return 1;
+  return 抽.基础 + ($('gSoft').checked ? Math.max(0, k - 抽.软保底起) * 抽.每抽加 : 0);
+}
+function 抽到限定(r) {
+  let 总 = 0, 距 = 0, 必中 = false;
+  for (;;) {
+    总++; 距++;
+    if (r() < 本抽概率(距)) { if (!$('gFifty').checked || 必中 || r() >= 抽.歪的概率) return 总; 必中 = true; 距 = 0; }
+    if (总 > 20000) return 总;
+  }
+}
+function 抽卡统计() {
+  const r = 种子随机(2024), N = 抽.模拟人数, 结果 = new Int32Array(N);
+  for (let i = 0; i < N; i++) 结果[i] = 抽到限定(r);
+  const 排 = Array.from(结果).sort((a, b) => a - b), 均 = 排.reduce((s, v) => s + v, 0) / N;
+  const 桶 = new Array(200).fill(0); for (const v of 排) 桶[Math.min(199, v - 1)]++;
+  const 分位 = q => 排[Math.floor(q * (N - 1))];
+  柱图($('gC'), 桶, '#b07bff', [[Math.round(均), `平均 ${均.toFixed(0)} 抽`, '#ffc84a'], ...($('gHard').checked ? [[抽.硬保底, '90', '#5be08a'], [抽.硬保底 * 2, '180 最多', '#ff6b7a']] : [])], '抽到第一个限定角色要几抽（10 万个虚拟玩家）');
+  $('gOut').innerHTML = `平均 <span class="big">${均.toFixed(0)}</span> 抽 ≈ ${Math.round(均 * 抽.一抽多少钱)} 元（一抽约 ${抽.一抽多少钱} 元）。
+    运气最好的一成：${分位(0.1)} 抽以内。${(排.filter(v => v > 150).length / N * 100).toFixed(0)}% 的人要 150 抽以上。最多 ${排[N - 1]} 抽。<br>
+    <span class="dim">${$('gHard').checked ? '有保底，花费就有天花板（硬保底 + 大保底 = 最多 ' + 抽.硬保底 * ($('gFifty').checked ? 2 : 1) + ' 抽）。关掉保底再看看：尾巴拖到哪里去了。' : '没有硬保底：花费没有天花板，最倒霉的人会一直抽下去。'}</span>`;
+}
+let 单 = {距: 0, 必中: false, 总: 0, 记录: []};
+function 单抽(n) {
+  for (let i = 0; i < n; i++) {
+    单.总++; 单.距++;
+    const p = 本抽概率(单.距);
+    if (Math.random() < p) {
+      const 中 = !$('gFifty').checked || 单.必中 || Math.random() >= 抽.歪的概率;
+      单.记录.push(`第 ${单.总} 抽：${中 ? '★ 限定！' : '歪了（常驻）→ 下次必中'}（这一抽的概率 ${(p * 100).toFixed(1)}%）`);
+      单.必中 = !中; 单.距 = 0;
+    }
+  }
+  $('gNow').innerHTML = `已抽 ${单.总}，距上次出货 ${单.距} 抽，下一抽概率 <b>${(本抽概率(单.距 + 1) * 100).toFixed(1)}%</b>${单.必中 ? '，<b style="color:#1fae5a">下次必中限定</b>' : ''}`;
+  if (单.记录.length) $('gOut').innerHTML = 单.记录.slice(-6).join('<br>');
+}
+$('g1').onclick = () => 单抽(1); $('g10').onclick = () => 单抽(10);
+$('gReset').onclick = () => { 单 = {距: 0, 必中: false, 总: 0, 记录: []}; 单抽(0); 抽卡统计(); };
+['gSoft', 'gHard', 'gFifty'].forEach(id => $(id).onchange = () => { 抽卡统计(); 单抽(0); });
+
+// ================= ③ 强化 =================
+const 会掉 = 星 => 星 >= 参数.掉星起 && !参数.不掉星的台阶.includes(星);
+const 强 = {星: 0, 连掉: 0, 次: 0, 碎: 0, 演: null, 星星: 0};
+function 三档(星, 掉星规则, 连掉, 抓中) {
+  if (掉星规则 && 连掉 >= 2) return [1, 0, 0];   // 旧规则保底
+  let 成 = 参数.强化成功[星] / 100 * (抓中 ? 参数.抓星星加成 : 1);
+  成 = Math.min(1, 成);
+  const 碎 = Math.min(1 - 成, (参数.强化碎掉[星] || 0) / 100);   // 例：21→22 星 成功 15%、碎 12.75%、剩下 72.25% 原地不动
+  return [成, 1 - 成 - 碎, 碎];
+}
+function 敲一下() {
+  if (强.演 || 强.星 >= 30) return;
+  const 抓中 = $('sCatch').checked && Math.abs(Math.sin(强.星星)) < 0.25;
+  const [成, , 碎] = 三档(强.星, $('sDrop').checked, 强.连掉, 抓中), r = Math.random();
+  强.次++;
+  let 果;
+  if (r < 成) { 果 = '成功'; 强.星++; 强.连掉 = 0; }
+  else if (r < 成 + 碎) { 果 = '碎了'; 强.碎++; 强.星 = 参数.碎了回到; 强.连掉 = 0; }
+  else if ($('sDrop').checked && 会掉(强.星)) { 果 = '掉一星'; 强.星--; 强.连掉++; }
+  else { 果 = '失败'; }
+  // 演出：成功 = 先憋 0.5 秒再金光 1.2 秒；失败 = 闷一下 0.3 秒就完
+  const 长 = !$('sShow').checked ? 0.4 : 果 === '成功' ? 1.7 : 果 === '碎了' ? 1.2 : 0.3;
+  强.演 = {果, t: 0, 长, 抓中};
+  音(果);
+}
+let 音境;
+function 音(果) {
+  try {
+    音境 = 音境 || new AudioContext(); const a = 音境, t = a.currentTime;
+    const 响 = (f, 起, 长, 型 = 'sine', 量 = 0.15) => { const o = a.createOscillator(), g = a.createGain(); o.type = 型; o.frequency.setValueAtTime(f, t + 起); g.gain.setValueAtTime(量, t + 起); g.gain.exponentialRampToValueAtTime(0.001, t + 起 + 长); o.connect(g).connect(a.destination); o.start(t + 起); o.stop(t + 起 + 长); };
+    if (!$('sShow').checked) return 响(440, 0, 0.15, 'triangle');
+    if (果 === '成功') { 响(220, 0, 0.45, 'sawtooth', 0.04); [523, 659, 784, 1047].forEach((f, i) => 响(f, 0.5 + i * 0.07, 0.6, 'triangle')); }
+    else if (果 === '碎了') { 响(90, 0, 0.6, 'square', 0.12); 响(60, 0.05, 0.8, 'sawtooth', 0.1); }
+    else 响(140, 0, 0.18, 'sine', 0.2);
+  } catch (e) {}
+}
+$('sHit').onclick = 敲一下;
+addEventListener('keydown', e => { if (e.code === 'Space' && $('p-star').classList.contains('on')) { e.preventDefault(); 敲一下(); } });
+function 糖字(g, 文, x, y, 号, c1, c2) {
+  g.font = `900 ${号}px "Arial Rounded MT Bold","Segoe UI Black","Microsoft YaHei",sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  g.lineWidth = Math.max(4, 号 * 0.22); g.strokeStyle = INK; g.strokeText(文, x, y + 号 * 0.08); g.strokeText(文, x, y);
+  const 渐 = g.createLinearGradient(0, y - 号 / 2, 0, y + 号 / 2); 渐.addColorStop(0, c1); 渐.addColorStop(0.25, c1); 渐.addColorStop(0.75, c2);
+  g.fillStyle = 渐; g.fillText(文, x, y); g.textBaseline = 'alphabetic';
+}
+function 画强化(dt) {
+  const cv = $('sC'), g = 高清(cv), W = cv.W, H = cv.H;
+  强.星星 += dt * 3.2;
+  const 演 = 强.演; let 闪 = 0, 果字 = '', 抖 = 0;
+  if (演) { 演.t += dt; const 憋 = 演.果 === '成功' && $('sShow').checked ? 0.5 : 0;
+    if (演.t < 憋) 抖 = 3; else { 果字 = 演.果; 闪 = Math.max(0, 1 - (演.t - 憋) / 0.5); }
+    if (演.t >= 演.长) 强.演 = null; }
+  // 背景：淡紫放射光
+  const 底 = g.createRadialGradient(W / 2, 150, 0, W / 2, 150, W * 0.7); 底.addColorStop(0, '#fbf6ff'); 底.addColorStop(1, '#dcc7ff');
+  g.fillStyle = 底; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(W / 2, 150); g.rotate(performance.now() / 1000 * 0.08); g.fillStyle = 'rgba(255,255,255,.4)';
+  for (let i = 0; i < 16; i++) { g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, 500, i * Math.PI / 8, i * Math.PI / 8 + Math.PI / 16); g.fill(); } g.restore();
+  // 白卡片
+  g.fillStyle = INK; 圆角(g, W / 2 - 120, 36, 240, 214, 22); g.fill();
+  g.fillStyle = '#fff'; 圆角(g, W / 2 - 120, 30, 240, 214, 22); g.fill(); g.strokeStyle = INK; g.lineWidth = 4; g.stroke();
+  糖字(g, `★${强.星}`, W / 2, 54, 22, '#fff7c9', '#ffaa10');
+  // 背后的光：成功时大亮
+  const 亮 = 演 && 果字 === '成功' ? 0.5 + 闪 * 0.5 : 0.35;
+  const 光 = g.createRadialGradient(W / 2, 140, 0, W / 2, 140, 80); 光.addColorStop(0, `rgba(255,228,120,${亮})`); 光.addColorStop(1, 'rgba(255,228,120,0)');
+  g.fillStyle = 光; g.fillRect(W / 2 - 90, 60, 180, 170);
+  // 砧子
+  g.fillStyle = '#5a4a72'; 圆角(g, W / 2 - 46, 206, 92, 16, 6); g.fill(); g.strokeStyle = INK; g.lineWidth = 3; g.stroke();
+  // 剑：银色剑身、金色护手、紫色剑柄；碎了就断成两截
+  const 碎 = 演 && 果字 === '碎了';
+  g.save(); g.translate(W / 2 + (Math.random() - 0.5) * 抖, 196); g.lineJoin = 'round';
+  const 刃 = g.createLinearGradient(-8, 0, 8, 0); 刃.addColorStop(0, '#ffffff'); 刃.addColorStop(0.5, '#dfe6f2'); 刃.addColorStop(0.51, '#aab6cc'); 刃.addColorStop(1, '#c8d2e4');
+  g.fillStyle = 碎 ? '#8a7a9a' : 刃; g.strokeStyle = INK; g.lineWidth = 3;
+  if (!碎) { g.beginPath(); g.moveTo(-8, -32); g.lineTo(-8, -118); g.lineTo(0, -136); g.lineTo(8, -118); g.lineTo(8, -32); g.closePath(); g.fill(); g.stroke(); }
+  else { g.beginPath(); g.moveTo(-8, -32); g.lineTo(-8, -70); g.lineTo(8, -78); g.lineTo(8, -32); g.closePath(); g.fill(); g.stroke();
+         g.save(); g.translate(26, -96); g.rotate(0.5); g.beginPath(); g.moveTo(-8, 10); g.lineTo(-8, -30); g.lineTo(0, -46); g.lineTo(8, -30); g.lineTo(8, 4); g.closePath(); g.fill(); g.stroke(); g.restore(); }
+  g.fillStyle = '#ffc21e'; 圆角(g, -26, -34, 52, 10, 5); g.fill(); g.stroke();
+  g.fillStyle = '#c45bd9'; 圆角(g, -5, -24, 10, 22, 4); g.fill(); g.stroke();
+  g.fillStyle = '#ffc21e'; g.beginPath(); g.arc(0, 0, 6, 0, 7); g.fill(); g.stroke();
+  g.restore();
+  // 锤子：敲下去
+  const 敲 = 演 && 演.t < 0.25 ? 演.t / 0.25 : 1;
+  g.save(); g.translate(W / 2 + 62, 150); g.rotate(0.7 - Math.sin(敲 * Math.PI) * 0.6); g.lineJoin = 'round'; g.strokeStyle = INK; g.lineWidth = 3;
+  g.fillStyle = '#c98a3a'; 圆角(g, -4, -10, 8, 64, 3); g.fill(); g.stroke();
+  g.fillStyle = '#ffc21e'; 圆角(g, -16, -26, 32, 20, 5); g.fill(); g.stroke(); g.restore();
+  if (闪 > 0) { g.fillStyle = 果字 === '成功' ? `rgba(255,220,100,${闪 * 0.45})` : 果字 === '碎了' ? `rgba(255,60,120,${闪 * 0.35})` : `rgba(120,80,160,${闪 * 0.12})`; g.fillRect(0, 0, W, H); }
+  if (果字) {
+    const [c1, c2] = 果字 === '成功' ? ['#fff7c9', '#ffaa10'] : 果字 === '碎了' ? ['#ffd6e7', '#ff2f78'] : ['#ffffff', '#b8a3d8'];
+    糖字(g, 果字, W / 2, 268 - (果字 === '成功' ? 闪 * 10 : 0), 果字 === '成功' ? 34 : 26, c1, c2);
+    if (演.抓中) 糖字(g, '抓中 ×1.05', W / 2 + 120, 240, 14, '#fff', '#ffaa10');
+  }
+  // 抓星星条：深紫圆角槽、中间黄区、星星来回跑
+  if ($('sCatch').checked) {
+    const x0 = 40, w0 = W - 80, y0 = 296;
+    g.fillStyle = '#3a1f52'; 圆角(g, x0, y0, w0, 22, 11); g.fill(); g.strokeStyle = INK; g.lineWidth = 3; g.stroke();
+    g.fillStyle = '#ffd23f'; g.fillRect(W / 2 - w0 * 0.125, y0 + 3, w0 * 0.25, 16);
+    const x = W / 2 + Math.sin(强.星星) * w0 / 2;
+    g.save(); g.translate(x, y0 + 11); g.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 6 : 14; g.lineTo(Math.cos(a) * r, Math.sin(a) * r); } g.closePath();
+    g.fillStyle = '#ffd23f'; g.fill(); g.strokeStyle = INK; g.lineWidth = 2.5; g.stroke(); g.restore();
+  }
+  const 抓中 = $('sCatch').checked && Math.abs(Math.sin(强.星星)) < 0.25;
+  const [成, 保, 碎率] = 三档(Math.min(29, 强.星), $('sDrop').checked, 强.连掉, 抓中);
+  $('sOk').textContent = (成 * 100).toFixed(2) + '%'; $('sKeep').textContent = (保 * 100).toFixed(2) + '%'; $('sBoom').textContent = (碎率 * 100).toFixed(2) + '%';
+  $('sStat').innerHTML = `点了 <b>${强.次}</b> 次 · 碎了 <b>${强.碎}</b> 次${$('sDrop').checked ? ` · 连掉 ${强.连掉}` : ''}<br><span class="dim">台阶：前面几乎次次成功，等你发现变难了，已经投进去十几颗星。</span>`;
+}
+function 画台阶() {
+  const cv = $('sTab'), g = 高清(cv), W = cv.W, H = cv.H; g.clearRect(0, 0, W, H);
+  const w = W / 30; 参数.强化成功.forEach((v, i) => {
+    const h = v / 100 * (H - 30), 色 = 参数.强化碎掉[i] ? '#ff5f8f' : '#3fd46b';
+    g.fillStyle = 色; 圆角(g, i * w + 1.5, H - 18 - h, w - 3, h, 3); g.fill(); g.strokeStyle = INK; g.lineWidth = 1.5; g.stroke();
+  });
+  g.fillStyle = '#7a5a8a'; g.font = '700 11px system-ui'; g.textAlign = 'left'; g.fillText('0 星 → 29 星 每一次的成功率（粉色 = 会碎）', 4, H - 4);
+}
+function 模拟到22(掉星) {
+  const r = 种子随机(7), 次们 = [], 碎们 = [];
+  for (let p = 0; p < 2000; p++) {
+    let 星 = 0, 连 = 0, 次 = 0, 碎 = 0;
+    while (星 < 22 && 次 < 1e5) {
+      次++; const [成, , 碎率] = 三档(星, 掉星, 连, false), x = r();
+      if (x < 成) { 星++; 连 = 0; } else if (x < 成 + 碎率) { 碎++; 星 = 参数.碎了回到; 连 = 0; } else if (掉星 && 会掉(星)) { 星--; 连++; }
+    }
+    次们.push(次); 碎们.push(碎);
+  }
+  次们.sort((a, b) => a - b); const 均 = a => a.reduce((s, v) => s + v, 0) / a.length;
+  return {均: Math.round(均(次们)), 中: 次们[1000], 碎: 均(碎们).toFixed(1)};
+}
+$('sSim').onclick = () => { const a = 模拟到22(true), b = 模拟到22(false);
+  $('sSimOut').innerHTML = `有掉星：平均点 <b>${a.均}</b> 次（一半人 ${a.中} 次内），平均碎 ${a.碎} 次<br>没掉星：平均点 <b>${b.均}</b> 次（一半人 ${b.中} 次内），平均碎 ${b.碎} 次<br><span class="dim">同一张成功率 / 碎掉率表，只差「掉不掉星」（示意，不是官方旧数据）。来回掉星不是刺激，只是耗时间；真正勾人的，是风险和「差一点」。</span>`; };
+
+// ================= ④ 经济 =================
+function 经济跑(下水道, 工作室, 种 = 3) {
+  const E = 参数.经济, r = 种子随机(种), N = E.人数;
+  const 本事 = Array.from({length: N}, () => Math.exp(0.35 * Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(6.283 * r())));
+  const 金 = new Float64Array(N), 价 = [];
+  for (let d = 0; d < E.天数; d++) {
+    for (let i = 0; i < N; i++) 金[i] += 100 * (1 + 0.03 * d) * 本事[i];                    // 水龙头：打怪、任务、卖店
+    if (工作室 && d >= E.工作室开始) for (let k = 0; k < 200; k++) 金[Math.floor(r() * N)] += 工作室 * 800 / 200;   // 工作室卖金
+    for (let i = 0; i < N; i++) 金[i] -= Math.min(金[i], E.买药 + 下水道 * 金[i]);            // 下水道：药、修理、强化（越有钱花越多）
+    let 出价 = 0; for (let i = 0; i < N; i++) { const b = 金[i] * E.拿出来抢的比例; 出价 += b; 金[i] -= b; }
+    const 税 = 下水道 > 0 ? E.拍卖抽成 : 0;
+    for (let k = 0; k < E.每天上架; k++) 金[Math.floor(r() * N)] += 出价 * (1 - 税) / E.每天上架;   // 卖家也是玩家
+    价.push(出价 / E.每天上架);
+  }
+  return 价;
+}
+function 经济() {
+  const s = +$('eSink').value, b = +$('eBot').value; $('eSinkV').textContent = (s * 100).toFixed(0) + '%/天'; $('eBotV').textContent = b;
+  const 线 = [['下水道很小', 经济跑(0, 0), '#ff2f78'], ['下水道开大', 经济跑(s, 0), '#1fae5a'], ['开大 + 工作室', 经济跑(s, b), '#e08a00']];
+  const cv = $('eC'), g = 高清(cv), W = cv.W, H = cv.H, L = 60, B = 26; g.clearRect(0, 0, W, H);
+  const 大 = Math.max(...线.flatMap(x => x[1])), 对 = v => H - B - Math.log10(Math.max(1, v)) / Math.log10(大) * (H - B - 20);
+  g.strokeStyle = '#e2d4f5'; g.lineWidth = 1; g.fillStyle = '#7a5a8a'; g.font = '700 11px system-ui'; g.textAlign = 'left';
+  for (let p = 1; p <= 大 * 10; p *= 10) { g.beginPath(); g.moveTo(L, 对(p)); g.lineTo(W, 对(p)); g.stroke(); g.fillText(p + ' 金', 4, 对(p) + 4); }
+  线.forEach(([名, 价, 色], j) => { g.strokeStyle = 色; g.lineWidth = 4; g.lineJoin = 'round'; g.beginPath(); 价.forEach((v, d) => { const x = L + d / 59 * (W - L - 10); d ? g.lineTo(x, 对(v)) : g.moveTo(x, 对(v)); }); g.stroke(); g.fillStyle = 色; g.font = '900 13px system-ui,"Microsoft YaHei"'; g.fillText('━ ' + 名, L + 14, 24 + j * 18); g.font = '700 11px system-ui'; });
+  g.fillStyle = '#7a5a8a'; g.fillText('第 1 天 → 第 60 天，材料价格（对数刻度）', L, H - 6);
+  $('eOut').innerHTML = 线.map(([名, 价, 色]) => `<span style="color:${色}">${名}</span>：第 1 天 ${Math.round(价[0])} 金 → 第 60 天 <b>${Math.round(价[59])}</b> 金，新玩家（一天挣 ${参数.经济.新手日收入}）要攒 <b>${(价[59] / 参数.经济.新手日收入).toFixed(1)}</b> 天`).join('<br>')
+    + '<br><span class="dim">金币凭空变出来（水龙头），也要凭空消失（下水道）。钱印得太多，东西就贵。</span>';
+}
+['eSink', 'eBot'].forEach(id => $(id).oninput = 经济);
+
+// ---------------- 启动 ----------------
+掉率(); 抽卡统计(); 单抽(0); 画台阶(); 经济();
+let 上 = performance.now();
+function 帧(now) { const dt = Math.max(0, Math.min(0.05, (now - 上) / 1000)); 上 = now; 画强化(dt); requestAnimationFrame(帧); }
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>

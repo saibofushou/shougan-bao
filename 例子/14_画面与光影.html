@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>14 画面与光影 · 小例子</title>
+<style>
+:root{--bg:#0f0e14;--panel:#18171f;--line:#2b2936;--txt:#ece9f3;--dim:#9b97a8;--acc:#ffc84a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,sans-serif;padding:12px;max-width:1080px;margin:auto}
+h1{font-size:18px;margin:4px 0}h2{font-size:13px;color:var(--acc);margin:8px 0 4px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tabs button{flex:1;min-width:120px}
+button,select{background:#262432;color:var(--txt);border:1px solid #3a3748;border-radius:6px;padding:5px 9px;cursor:pointer;font-size:13px}
+button:hover,button.on{border-color:var(--acc)}button.on{background:#3a3320}
+.page{display:none}.page.on{display:block}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+canvas{width:100%;display:block;border-radius:8px;background:#000}
+.out{background:#18171f;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0}
+.dim{color:var(--dim);font-size:12px}
+input[type=range]{flex:1;min-width:140px}
+label{display:inline-flex;gap:4px;align-items:center;cursor:pointer;background:#1e1d27;border:1px solid #33313f;border-radius:6px;padding:3px 7px}
+label.on{border-color:#6b5a2a}
+.steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:5px}
+</style>
+</head>
+<body>
+<h1>14 画面与光影：模型决定有什么，着色器决定什么样</h1>
+<div class="tabs"><button data-t="A" class="on">① 光影一层层打开</button><button data-t="B">② 着色器入门 8 步</button><button data-t="C">③ 画面五十年</button></div>
+
+<div class="page on" id="p-A">
+  <canvas id="glA" width="480" height="270"></canvas>
+  <div class="row" id="层钮"></div>
+  <div class="row"><button id="aAll">全开</button><button id="aNone">全关（剪纸）</button><button id="aStep">一层一层加上去</button>
+    画风 <select id="aSty"><option value="0">写实</option><option value="1">卡通（分色块 + 描边）</option><option value="2">水墨（墨色 + 留白）</option></select>
+    <label><input type="checkbox" id="aMove" checked> 水在动</label></div>
+  <div class="row">太阳：早 <input type="range" id="aSun" min="0" max="1" step="0.01" value="0.3"> 傍晚</div>
+  <div class="out" id="aOut"></div>
+</div>
+
+<div class="page" id="p-B">
+  <canvas id="glB" width="960" height="540"></canvas>
+  <div class="steps" id="步钮"></div>
+  <div class="row"><span id="bPn" style="min-width:90px"></span><input type="range" id="bP" min="0" max="1" step="0.01" value="0.5"></div>
+  <div class="out" id="bOut"></div>
+  <div class="row"><button id="bRace">比一比：处理器（一个人）算 vs 显卡（几千人同时算）</button><span id="bRaceOut" class="dim"></span></div>
+</div>
+
+<div class="page" id="p-C">
+  <canvas id="cv" width="960" height="540"></canvas>
+  <div class="steps" id="代钮"></div>
+  <div class="row" id="cCtl"></div>
+  <div class="out" id="cOut"></div>
+</div>
+
+<script>
+// ===================== 参数表 =====================
+const 光影层 = [   // 名字, 一句话
+  ['光照', '按每个面朝太阳的角度算明暗：朝光亮，背光暗'],
+  ['材质', '金属高光又亮又锐、玉石温润透光、石头粗糙几乎不反光'],
+  ['影子', '从地面朝太阳看一眼，被挡住就是影子；离挡的东西越远，边越虚'],
+  ['环境光遮蔽', '墙角、缝隙、贴地的地方天光进不去，自然变暗'],
+  ['水面', '斜看像镜子、低头看得见水底（菲涅尔）；水底有晃动的光纹（焦散）'],
+  ['体积光', '空气里有薄雾，被柱子挡住的地方留下一道道光柱'],
+  ['高动态范围 + 泛光', '亮度可以超过「白」，再压回屏幕能显示的范围；太亮的地方溢出光晕'],
+  ['光线追踪反射', '光碰到金属球再弹一次，球上照出周围真实的东西'],
+];
+const 步骤 = [  // 名字, 滑杆名, 说明
+  ['① 坐标→颜色', '蓝色多少', '每个像素只回答一个问题：我是什么颜色？最简单的答案：越往右越红，越往上越绿。'],
+  ['② 画一个圆', '半径', '算每个像素离中心多远：近的涂红，远的涂白。没有「画圆」这个命令，只有「算距离」。'],
+  ['③ 加上时间', '动多大', '把时间放进公式，画面就动起来：圆心跟着 sin(时间) 走，半径一呼一吸。'],
+  ['④ 噪声', '格子大小', '左半：每个格子一个随机数 = 电视雪花，太乱。右半：格子之间平滑过渡 = 柔和的起伏（1983 年为电影特效发明）。'],
+  ['⑤ 几层叠起来', '叠几层', '大小不同的几层噪声叠起来，一层比一层细、一层比一层淡，就是云、雾、石头的纹理。'],
+  ['⑥ 水墨山水', '雾多浓', '把噪声当成山的轮廓，由远到近画四层，远的淡、近的浓，山脚加雾。'],
+  ['⑦ 光线步进（三维）', '太阳角度', '从眼睛朝每个像素射一条线，一步步往前走（每步走「离最近物体的距离」），碰到就停，再按光的方向算明暗和影子。'],
+  ['⑧ 分形', '形状参数', '把球换成分形公式：同一个公式反复套几次，就是金色的立体图案。'],
+];
+const 年代 = [  // 名字, 说明
+  ['1972 电路画线', '没有图片也没有程序：球和球拍是几十块电路芯片直接在电视信号里「画」出来的短线。'],
+  ['1979 矢量屏', '电子束像一支笔在屏幕上直接画线：不存像素，只存「从哪画到哪」，和今天的 SVG 是一个思路。'],
+  ['1984 现场算星球', '程序只有 22KB，却装下 8 个星系、两千多个星球：星球不存，从一个数字现场算出来。拖动「星系编号」，同一个编号永远是同一组星球。'],
+  ['1985 8×8 三色', '一个小图块 8×8 格，只能用 3 种颜色加透明。头发画不清、嘴巴动不了 → 所以给角色戴帽子、留胡子、穿背带裤。'],
+  ['1996 早期 3D', '几百个三角形，贴图又小又糊；没有小数精度，顶点只能落在整数像素上 → 画面一抖一抖；贴图按「平的」方式铺，斜着看会扭。'],
+  ['2004 现算贴图', '一个团队把整个 3D 射击游戏塞进 96KB：贴图不存成图片，运行时用公式现算。'],
+];
+// ================================================
+
+const $ = id => document.getElementById(id);
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b)); document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t)); 当前标签 = b.dataset.t; 要画 = true; });
+let 当前标签 = 'A', 要画 = true;
+
+// ---------- 共用的着色器工具（GLSL 只认英文） ----------
+const 头 = `precision highp float;
+uniform vec2 R; uniform float T;
+float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+float noise(vec2 p){ vec2 i=floor(p),f=fract(p); vec2 u=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y); }
+float fbm(vec2 p){ float s=0.,a=.5; for(int i=0;i<5;i++){ s+=a*noise(p); p=p*2.03+7.1; a*=.5; } return s; }
+float sdBox(vec3 p, vec3 b){ vec3 q=abs(p)-b; return length(max(q,0.))+min(max(q.x,max(q.y,q.z)),0.); }
+`;
+function 建(cv, 片) {
+  const gl = cv.getContext('webgl', {preserveDrawingBuffer: true}); if (!gl) return null;
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 a;void main(){gl_Position=vec4(a,0,1);}')); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 头 + 片)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('着色器链接失败 ' + gl.getProgramInfoLog(p)); gl.useProgram(p);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(p, 'a'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+  const u = {}; return {gl, set(n, v) { u[n] = u[n] || gl.getUniformLocation(p, n); Array.isArray(v) ? (v.length === 2 ? gl.uniform2fv(u[n], v) : gl.uniform1fv(u[n], v)) : gl.uniform1f(u[n], v); }, 画() { gl.viewport(0, 0, cv.width, cv.height); gl.drawArrays(gl.TRIANGLES, 0, 3); }};
+}
+
+// ======================= ① 光影八层 =======================
+const 片A = `
+uniform float L[8]; uniform float STY, SUN;
+vec3 sunDir; vec3 SUNC = vec3(1.,.88,.72)*2.4; vec3 SKYC = vec3(.32,.45,.65);
+vec2 mapA(vec3 p){
+  float pool = sdBox(p-vec3(2.,0.,.3), vec3(1.5,.45,1.4));
+  vec2 r = vec2(max(p.y,-pool), 1.);
+  float m = length(p-vec3(-.9,.6,.3))-.6; if(m<r.x) r=vec2(m,2.);
+  float j = length(p-vec3(.25,.45,-1.))-.45; if(j<r.x) r=vec2(j,3.);
+  float s = sdBox(p-vec3(-2.6,.45,-.7),vec3(.42))-.04; if(s<r.x) r=vec2(s,4.);
+  vec3 q = p-vec3(0.,1.7,3.4); q.x = mod(q.x+.95,1.9)-.95;
+  float pl = max(sdBox(q,vec3(.25,1.7,.25)), abs(p.x)-4.6);
+  pl = min(pl, sdBox(p-vec3(0.,3.5,3.4),vec3(4.6,.2,.35)));
+  if(pl<r.x) r=vec2(pl,5.);
+  return r;
+}
+vec3 nrm(vec3 p){ vec2 e=vec2(.0015,-.0015);
+  return normalize(e.xyy*mapA(p+e.xyy).x+e.yyx*mapA(p+e.yyx).x+e.yxy*mapA(p+e.yxy).x+e.xxx*mapA(p+e.xxx).x); }
+vec2 march(vec3 ro, vec3 rd){ float t=.02, m=-1.;
+  for(int i=0;i<100;i++){ vec2 h=mapA(ro+rd*t); if(h.x<.0012*t){ m=h.y; break; } t+=h.x; if(t>30.) break; } return vec2(t,m); }
+float shadow(vec3 ro, vec3 rd){ float s=1., t=.03;
+  for(int i=0;i<36;i++){ float h=mapA(ro+rd*t).x; s=min(s,9.*h/t); if(s<.002) break; t+=clamp(h,.03,.5); if(t>12.) break; } return clamp(s,0.,1.); }
+float occl(vec3 p, vec3 n){ float o=0., w=1.;
+  for(int i=1;i<6;i++){ float d=.09*float(i); o+=w*(d-mapA(p+n*d).x); w*=.65; } return clamp(1.-2.2*o,0.,1.); }
+bool inPool(vec3 p){ return p.x>.5&&p.x<3.5&&p.z>-1.1&&p.z<1.7; }
+vec3 sky(vec3 rd){ vec3 c = mix(vec3(.75,.8,.85), SKYC*1.4, clamp(rd.y*1.6,0.,1.));
+  float s = max(dot(rd,sunDir),0.); c += SUNC*(pow(s,900.)*12.);
+  if(rd.y<0.) c = mix(c, vec3(.42,.38,.32), clamp(-rd.y*4.,0.,1.));
+  if(STY>1.5) c = vec3(.94,.91,.83); return c; }
+vec3 albedo(float m, vec3 p){
+  if(m<1.5){ float g = fbm(p.xz*2.5); vec3 c = vec3(.58,.52,.43)*(.75+.5*g);
+    vec2 t = abs(fract(p.xz*.8)-.5); c *= .82+.18*smoothstep(.0,.04,min(t.x,t.y)); if(p.y<-.2) c=vec3(.42,.5,.45)*(.8+.4*g); return c; }
+  if(m<2.5) return vec3(1.,.76,.33);
+  if(m<3.5) return vec3(.3,.72,.52);
+  if(m<4.5) return vec3(.46,.44,.41)*(.6+.8*fbm(p.xy*5.+p.z*3.));
+  return vec3(.72,.64,.56);
+}
+float rough(float m){ return m<1.5?.85: m<2.5?.18: m<3.5?.32: m<4.5?.95:.7; }
+float caust(vec2 p){ float t=T*.8; float c=0.;
+  for(int i=0;i<3;i++){ vec2 q=p*float(i+2)*1.3+vec2(t*.6,-t*.4)*float(i+1); c+=pow(1.-abs(sin(q.x+sin(q.y+t))*sin(q.y*1.1+sin(q.x*.9-t))),6.); } return c; }
+vec3 shadeBasic(vec3 p, vec3 n, vec3 rd, float m, float lite){
+  vec3 a = albedo(m,p);
+  float sh = (L[2]>.5&&lite<.5) ? shadow(p+n*.01,sunDir) : 1.;
+  float ao = (L[3]>.5&&lite<.5) ? occl(p,n) : 1.;
+  if(L[0]<.5) return a*(.55+.45*sh)*(.6+.4*ao);
+  float ndl = max(dot(n,sunDir),0.);
+  if(m>2.5&&m<3.5&&L[1]>.5) ndl = max((dot(n,sunDir)+.5)/1.5,0.);
+  if(STY>.5&&STY<1.5){ float d=ndl*sh; d = d>.45?1.: d>.12?.55:.28; vec3 c=a*d*1.05;
+    if(L[1]>.5){ vec3 h=normalize(sunDir-rd); if(dot(n,h)>.97&&sh>.5) c=vec3(1.); }
+    return c*(.75+.25*ao); }
+  vec3 amb = SKYC*(.5+.5*n.y)*.75*ao;
+  vec3 col;
+  if(L[1]>.5){
+    float r = rough(m); bool metal = m>1.5&&m<2.5;
+    vec3 h = normalize(sunDir-rd); float shin = 2./max(r*r*r*r,.0006)-2.;
+    float F0 = metal? 1.: .04; float fr = F0+(1.-F0)*pow(1.-max(dot(h,-rd),0.),5.);
+    vec3 spec = (metal? a: vec3(1.))*fr*pow(max(dot(n,h),0.),shin)*(shin+8.)/25.*ndl;
+    vec3 dif = metal? vec3(0.): a*(SUNC*ndl*sh/3.14+amb);
+    col = dif + SUNC*spec*sh*.5;
+    if(metal) col += a*sky(reflect(rd,n))*.85*ao;
+    if(m>2.5&&m<3.5) col += vec3(.2,.6,.4)*pow(max(dot(rd,sunDir),0.),2.)*.35;
+  } else col = a*(SUNC*ndl*sh/3.14+amb);
+  if(L[4]>.5&&inPool(p)&&p.y<-.2) col += SUNC*caust(p.xz)*.12*sh;
+  return col;
+}
+// 金属球反射和水面反射共用「一次」反射追踪：写成两段时，Windows 的显卡编译器（D3D）会编崩，整页黑掉
+vec3 scene(vec3 ro, vec3 rd, out float tHit, out float rim){
+  vec2 h = march(ro,rd); tHit = h.x; rim = 1.;
+  vec3 col; vec3 p = ro+rd*h.x; vec3 n = vec3(0,1,0);
+  float kind = 0.; vec3 ro2 = p, rd2 = rd, base = vec3(0.); float fr = 0.;   // kind 1 = 金属球反射，2 = 水面反射
+  if(h.y<0.) col = sky(rd);
+  else { n = nrm(p); col = shadeBasic(p,n,rd,h.y,0.); rim = h.y<1.5 ? 1. : max(dot(n,-rd),0.);
+    if(h.y>1.5&&h.y<2.5&&L[7]>.5&&L[0]>.5&&STY<.5){ kind = 1.; ro2 = p+n*.02; rd2 = reflect(rd,n); } }
+  float tw = (-.1-ro.y)/rd.y;
+  if(rd.y<0.&&tw>0.&&tw<tHit){ vec3 pw = ro+rd*tw;
+    if(inPool(pw)){ kind = 0.;
+      if(L[4]>.5){ vec2 e=pw.xz*3.; float w = T*1.2;
+        vec3 wn = normalize(vec3((noise(e+vec2(w,0))-noise(e+vec2(w,0)+vec2(.1,0)))*1.2,1.,(noise(e+vec2(0,w))-noise(e+vec2(0,w)+vec2(0,.1)))*1.2));
+        kind = 2.; ro2 = pw+vec3(0,.01,0); rd2 = reflect(rd,wn); base = col*vec3(.55,.8,.85);
+        fr = .02+.98*pow(1.-max(dot(wn,-rd),0.),5.);
+      } else col = vec3(.2,.38,.55)*(L[0]>.5? .6+.6*max(sunDir.y,0.): 1.);
+      tHit = tw; rim = 1.; } }
+  if(kind>.5){ vec2 h2 = march(ro2,rd2); vec3 rc;
+    if(h2.y<0.) rc=sky(rd2); else { vec3 p2=ro2+rd2*h2.x; rc=shadeBasic(p2,nrm(p2),rd2,h2.y,1.); }
+    col = kind<1.5 ? col*.25 + albedo(2.,p)*rc*.8 : mix(base, rc, fr); }
+  return col;
+}
+void main(){
+  vec2 uv = (gl_FragCoord.xy-.5*R)/R.y;
+  sunDir = normalize(mix(normalize(vec3(-.85,.6,-.35)), normalize(vec3(.1,.16,1.)), SUN));
+  if(SUN>.6) SUNC = mix(SUNC, vec3(1.,.55,.3)*2.6, (SUN-.6)/.4);
+  vec3 ro = vec3(.4,2.1,-6.6), ta = vec3(.2,.5,.8);
+  vec3 f = normalize(ta-ro), r = normalize(cross(vec3(0,1,0),f)), u = cross(f,r);
+  vec3 rd = normalize(uv.x*r+uv.y*u+1.6*f);
+  float tHit, rim; vec3 col = scene(ro,rd,tHit,rim);
+  if(L[5]>.5){ float tm = min(tHit,16.), acc=0.; float dith = hash(gl_FragCoord.xy+T);
+    for(int i=0;i<16;i++){ float t = tm*(float(i)+dith)/16.; vec3 q = ro+rd*t; float lit = 1.; float s=.05;
+      for(int k=0;k<10;k++){ float hh = mapA(q+sunDir*s).x; if(hh<.01){ lit=0.; break; } s+=max(hh,.08); if(s>8.) break; }
+      acc += lit; }
+    float fog = 1.-exp(-tm*.06); float ph = .15+2.2*pow(max(dot(rd,sunDir),0.),6.);
+    col = col*(1.-fog*.25) + SUNC*acc/16.*fog*ph*.35; }
+  if(L[6]>.5){ col += SUNC*pow(max(dot(rd,sunDir),0.),14.)*.35; col *= .7;
+    col = clamp((col*(2.51*col+.03))/(col*(2.43*col+.59)+.14),0.,1.); }
+  else col = clamp(col*.85,0.,1.);
+  if(STY>.5&&STY<1.5){ if(rim<.25) col = vec3(.08,.07,.1); }
+  if(STY>1.5){ float lum = dot(col,vec3(.3,.55,.15)); float ink = clamp(1.-lum*1.25,0.,1.);
+    ink = smoothstep(.15,.95,ink); ink += (hash(gl_FragCoord.xy*.37)-.5)*.06;
+    vec3 paper = vec3(.94,.91,.83); col = mix(paper, vec3(.1,.1,.12), ink*.9);
+    if(rim<.3) col = mix(col, vec3(.08), .8); }
+  gl_FragColor = vec4(pow(col,vec3(1./2.2)),1.);
+}`;
+const 层开 = 光影层.map(() => true);
+const 层钮 = $('层钮');
+层钮.innerHTML = 光影层.map(([n], i) => `<label class="on" title="${光影层[i][1]}"><input type="checkbox" data-i="${i}" checked>${i + 1} ${n}</label>`).join('');
+function 同步层钮() { 层钮.querySelectorAll('input').forEach(c => { c.checked = 层开[c.dataset.i]; c.parentNode.classList.toggle('on', c.checked); }); 说A(); 要画 = true; }
+层钮.onchange = e => { 层开[e.target.dataset.i] = e.target.checked; 停加层(); 同步层钮(); };
+let 加层计时 = 0;
+function 停加层() { clearInterval(加层计时); 加层计时 = 0; }
+$('aAll').onclick = () => { 停加层(); 层开.fill(true); 同步层钮(); };
+$('aNone').onclick = () => { 停加层(); 层开.fill(false); 同步层钮(); };
+$('aStep').onclick = () => { 停加层(); 层开.fill(false); $('aSun').value = .3; 同步层钮(); let k = 0; 加层计时 = setInterval(() => { if (k >= 层开.length) return 停加层(); if (k === 5) $('aSun').value = .9; /* 体积光逆光才明显：太阳挪到柱子后面 */ 层开[k++] = true; 同步层钮(); }, 1500); };
+$('aSty').onchange = () => { 说A(); 要画 = true; }; $('aSun').oninput = () => { 说A(); 要画 = true; };
+function 说A() { const 开 = 光影层.filter((_, i) => 层开[i]); const 最后 = 光影层.map((x, i) => [x, i]).filter(([, i]) => 层开[i]).pop();
+  $('aOut').innerHTML = (开.length ? `开着 ${开.length} 层。` + (最后 ? `<b>${最后[0][0]}</b>：${最后[0][1]}。` : '') : '全关：只剩形状和颜色，像一张剪纸。') +
+  (层开[5] && +$('aSun').value < .6 ? '<br>提示：体积光逆光时最明显——把太阳拖到「傍晚」，太阳落到柱子后面。' : '') + ($('aSty').value === '1' ? '<br>卡通：同样的光影数据，明暗切成三个色块、高光变硬边、轮廓描黑线。' : $('aSty').value === '2' ? '<br>水墨：同样的数据，亮度换成墨色浓淡，留白当天空，轮廓加墨线。' : ''); }
+说A();
+let 显A, 显B;
+$('glA').addEventListener('webglcontextlost', () => { $('aOut').innerHTML = '<b>显卡掉线了，画面停了。</b>刷新页面再试；还不行就少开几层（体积光、水面最费）。'; });
+try { 显A = 建($('glA'), 片A); } catch (e) { console.error(e); $('aOut').textContent = '这个浏览器不支持 WebGL：' + e.message; }
+// 这一幕很费显卡：一次画完，弱显卡会超时「掉线」。所以分 6 条，每一帧只画一条
+const A条数 = 6; let A条 = A条数, A时 = 0;
+function 设A(t) { 显A.set('R', [$('glA').width, $('glA').height]); 显A.set('T', t); 显A.set('L', 层开.map(Number)); 显A.set('STY', +$('aSty').value); 显A.set('SUN', +$('aSun').value); }
+function 画A条(k) { const gl = 显A.gl, W = $('glA').width, h = $('glA').height / A条数; gl.enable(gl.SCISSOR_TEST); gl.scissor(0, Math.round(k * h), W, Math.ceil(h)); 显A.画(); gl.disable(gl.SCISSOR_TEST); gl.flush(); }
+function 画A(t) { if (!显A || 显A.gl.isContextLost()) return; 设A(t); for (let k = 0; k < A条数; k++) 画A条(k); }   // 一口气画完（自查用）
+
+// ======================= ② 着色器入门 =======================
+const 片B = `
+uniform float M, P;
+float mb(vec3 p, float pw, out float trap){ vec3 z=p; float dr=1., r=0.; trap=10.;
+  for(int i=0;i<7;i++){ r=length(z); if(r>2.) break;
+    float th=acos(clamp(z.y/r,-1.,1.))*pw, ph=atan(z.z,z.x)*pw; dr=pow(r,pw-1.)*pw*dr+1.;
+    z=pow(r,pw)*vec3(sin(th)*cos(ph),cos(th),sin(th)*sin(ph))+p; trap=min(trap,length(z)); }
+  return .5*log(r)*r/dr; }
+float map7(vec3 p){ return min(p.y+.6, min(length(p-vec3(-.5,0.,0.))-.6, sdBox(p-vec3(.9,-.2,.3),vec3(.4))-.05)); }
+void main(){
+  vec2 uv = gl_FragCoord.xy/R; vec2 p = (gl_FragCoord.xy-.5*R)/R.y*2.;
+  vec3 col = vec3(0.);
+  if(M<1.5) col = vec3(uv.x, uv.y, P);
+  else if(M<2.5){ float d=length(p), r=.15+.8*P; col = mix(vec3(.9,.2,.2), vec3(.96), smoothstep(r-.006,r+.006,d));
+    col *= .93+.07*step(.5,fract(d*5.)); }
+  else if(M<3.5){ vec2 c = vec2(sin(T*1.3)*.9, cos(T*1.7)*.4)*P; float r = .35+.12*sin(T*3.)*P;
+    col = mix(vec3(.5+.5*sin(T),.3,.8), vec3(.1,.1,.15), smoothstep(r-.01,r+.01,length(p-c))); }
+  else if(M<4.5){ float s = 3.+15.*P; vec2 q = p*s*.5; float v = p.x<0.? hash(floor(q)): noise(q);
+    col = vec3(v); if(abs(p.x)<.006) col=vec3(1.,.8,.3); }
+  else if(M<5.5){ float n = 1.+floor(P*5.99); float s=0., a=.5; vec2 q=p*1.6+vec2(T*.05,0.);
+    for(int i=0;i<6;i++){ if(float(i)>=n) break; s+=a*noise(q); q=q*2.03+7.1; a*=.5; }
+    s /= 1.-pow(.5,n); col = mix(vec3(.25,.45,.75), vec3(1.), smoothstep(.35,.75,s)); }
+  else if(M<6.5){ col = vec3(.94,.91,.83); float x = uv.x*3.+T*.03;
+    for(int i=0;i<4;i++){ float fi=float(i); float h = .72-fi*.14 + (fbm(vec2(x*(1.+fi*.4)+fi*10.,fi))-.5)*(.35+fi*.05);
+      float ink = .2+fi*.22; float m = smoothstep(h+.004,h-.004,uv.y);
+      float mist = smoothstep(h-.22, h, uv.y)*P*1.1; float layer = ink*(1.-mist*.85);
+      col = mix(col, vec3(.1,.1,.12), m*layer); col = mix(col, vec3(.94,.91,.83), m*(1.-layer)*.3); }
+    col += (hash(gl_FragCoord.xy)-.5)*.03; }
+  else if(M<7.5){ vec3 ro=vec3(0.,.6,-3.5), rd=normalize(vec3(p*.5,1.)); float a = P*3.14;
+    vec3 L = normalize(vec3(cos(a),.6+.4*sin(a),-.3)); float t=0.; bool hit=false;
+    for(int i=0;i<90;i++){ float h=map7(ro+rd*t); if(h<.001){ hit=true; break; } t+=h; if(t>20.) break; }
+    col = vec3(.55,.65,.8)-rd.y*.2;
+    if(hit){ vec3 q=ro+rd*t; vec2 e=vec2(.001,0.); vec3 n=normalize(vec3(map7(q+e.xyy)-map7(q-e.xyy),map7(q+e.yxy)-map7(q-e.yxy),map7(q+e.yyx)-map7(q-e.yyx)));
+      float s=1., st=.02; for(int k=0;k<40;k++){ float h=map7(q+n*.01+L*st); s=min(s,10.*h/st); st+=clamp(h,.02,.3); if(s<.01||st>8.) break; }
+      vec3 al = q.y<-.59 ? vec3(.7)*(.8+.2*mod(floor(q.x*2.)+floor(q.z*2.),2.)) : vec3(.9,.45,.3);
+      col = al*(max(dot(n,L),0.)*clamp(s,0.,1.)*1.1+.18*(.5+.5*n.y)); col = pow(col,vec3(1./2.2)); } }
+  else { float ang = T*.25; vec3 ro = vec3(sin(ang)*2.15,.7,cos(ang)*2.15); vec3 f=normalize(-ro), r=normalize(cross(vec3(0,1,0),f)), u=cross(f,r);
+    vec3 rd = normalize(p.x*r+p.y*u+1.9*f); float pw = 3.+7.*P; float t=0., trap=0.; float it=0.; bool hit=false;
+    for(int i=0;i<110;i++){ float h=mb(ro+rd*t,pw,trap); if(h<.0012){ hit=true; break; } t+=h; it+=1.; if(t>6.) break; }
+    col = mix(vec3(.05,.04,.06), vec3(.16,.1,.08), uv.y);
+    if(hit){ vec3 q=ro+rd*t; float tr; vec2 e=vec2(.002,0.);
+      vec3 n=normalize(vec3(mb(q+e.xyy,pw,tr)-mb(q-e.xyy,pw,tr),mb(q+e.yxy,pw,tr)-mb(q-e.yxy,pw,tr),mb(q+e.yyx,pw,tr)-mb(q-e.yyx,pw,tr)));
+      float ao = clamp(1.-it/90.,0.,1.); vec3 gold = mix(vec3(.9,.6,.2), vec3(1.,.9,.6), clamp(trap*.6,0.,1.));
+      vec3 L = normalize(vec3(.6,.8,-.4)); float sp = pow(max(dot(reflect(rd,n),L),0.),24.);
+      col = gold*(.15+.85*max(dot(n,L),0.))*ao + vec3(1.,.9,.7)*sp*.8*ao; col = pow(col,vec3(.8)); } }
+  gl_FragColor = vec4(col,1.);
+}`;
+let 步 = 1;
+$('步钮').innerHTML = 步骤.map(([n], i) => `<button data-i="${i + 1}" class="${i ? '' : 'on'}">${n}</button>`).join('');
+$('步钮').onclick = e => { const b = e.target.closest('button'); if (!b) return; 步 = +b.dataset.i; $('步钮').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); $('bP').value = 步 === 8 ? .7 : .5; 说B(); 要画 = true; };
+$('bP').oninput = () => { 说B(); 要画 = true; };
+function 说B() { const [n, pn, s] = 步骤[步 - 1]; $('bPn').textContent = pn; const P = +$('bP').value;
+  const 补 = 步 === 5 ? `（现在 ${1 + Math.floor(P * 5.99)} 层）` : 步 === 8 ? `（次方 ${(3 + 7 * P).toFixed(1)}，8 是最常见的那个）` : '';
+  $('bOut').innerHTML = `<b>${n}</b>：${s}${补}`; }
+说B();
+try { 显B = 建($('glB'), 片B); } catch (e) { console.error(e); $('bOut').textContent = 'WebGL 出错：' + e.message; }
+function 画B(t) { if (!显B || 显B.gl.isContextLost()) return; 显B.set('R', [960, 540]); 显B.set('T', t); 显B.set('M', 步); 显B.set('P', +$('bP').value); 显B.画(); }
+// 处理器 vs 显卡：同一个「几层噪声叠成云」，各算一整张 960×540
+$('bRace').onclick = () => {
+  if (!显B || 显B.gl.isContextLost()) { $('bRaceOut').textContent = '这个浏览器现在用不了显卡（WebGL），比不了。'; return; }
+  const W = 960, H = 540, h = (x, y) => { let px = x * 123.34 % 1, py = y * 456.21 % 1; if (px < 0) px += 1; if (py < 0) py += 1; const d = px * (px + 45.32) + py * (py + 45.32); px += d; py += d; const v = px * py % 1; return v < 0 ? v + 1 : v; };
+  const nz = (x, y) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy); const a = h(ix, iy), b = h(ix + 1, iy), c = h(ix, iy + 1), d = h(ix + 1, iy + 1); return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy; };
+  let t0 = performance.now(), s = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let v = 0, a = .5, qx = (x - W / 2) / H * 3.2, qy = (y - H / 2) / H * 3.2; for (let o = 0; o < 6; o++) { v += a * nz(qx, qy); qx = qx * 2.03 + 7.1; qy = qy * 2.03 + 7.1; a *= .5; } s += v; }
+  const 处 = performance.now() - t0;
+  const 旧步 = 步, 旧P = $('bP').value; 步 = 5; $('bP').value = 1; const gl = 显B.gl, buf = new Uint8Array(4);
+  画B(0); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  t0 = performance.now(); for (let k = 0; k < 10; k++) 画B(k); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf); const 显 = (performance.now() - t0) / 10;
+  步 = 旧步; $('bP').value = 旧P; 要画 = true;
+  $('bRaceOut').textContent = `处理器一个一个算 51.8 万个像素：${处.toFixed(0)} 毫秒；显卡同时算：${显.toFixed(1)} 毫秒一张 → 快约 ${Math.round(处 / Math.max(显, .1))} 倍（数字跟电脑有关）`;
+  return [处, 显];
+};
+
+// ======================= ③ 画面五十年（2D 画布） =======================
+const cv = $('cv'), g = cv.getContext('2d');
+let 代 = 0, 星系 = 3, 帽子 = true, 抖 = true, 校正 = false, 贴种 = 1;
+$('代钮').innerHTML = 年代.map(([n], i) => `<button data-i="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('');
+$('代钮').onclick = e => { const b = e.target.closest('button'); if (!b) return; 代 = +b.dataset.i; $('代钮').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); 控件C(); 要画 = true; };
+function 控件C() {
+  const c = $('cCtl');
+  c.innerHTML = 代 === 2 ? `星系编号 <input type="range" id="cG" min="0" max="7" step="1" value="${星系}"><b id="cGv">${星系}</b>`
+    : 代 === 3 ? `<button id="cHat">${帽子 ? '换成：不戴帽子、没有胡子' : '换成：戴帽子、留胡子、背带裤'}</button><span class="dim">同样 16×16 格、同样 3 种颜色</span>`
+    : 代 === 4 ? `<label><input type="checkbox" id="cJ" ${抖 ? 'checked' : ''}> 顶点只能落在整数像素（会抖）</label><label><input type="checkbox" id="cP" ${校正 ? 'checked' : ''}> 贴图透视校正（后来的显卡才有）</label>`
+    : 代 === 5 ? `<button id="cS">换一组随机数</button><span class="dim">三张贴图都是公式现算的</span>` : '';
+  if ($('cG')) $('cG').oninput = () => { 星系 = +$('cG').value; $('cGv').textContent = 星系; 要画 = true; };
+  if ($('cHat')) $('cHat').onclick = () => { 帽子 = !帽子; 控件C(); 要画 = true; };
+  if ($('cJ')) $('cJ').onchange = () => { 抖 = $('cJ').checked; 要画 = true; };
+  if ($('cP')) $('cP').onchange = () => { 校正 = $('cP').checked; 要画 = true; };
+  if ($('cS')) $('cS').onclick = () => { 贴种++; 贴图缓存 = null; 要画 = true; };
+  $('cOut').innerHTML = `<b>${年代[代][0]}</b>：${年代[代][1]}`;
+}
+控件C();
+function 种子(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function 字(t, x, y, c = '#aaa', s = 13) { g.fillStyle = c; g.font = s + 'px system-ui'; g.fillText(t, x, y); }
+
+function 画1972(t) { g.fillStyle = '#000'; g.fillRect(0, 0, 960, 540);
+  const 块 = (x, y, w, h) => { g.fillStyle = '#eee'; for (let yy = y; yy < y + h; yy += 6) g.fillRect(x, yy, w, 4); };   // 一行行扫描线拼出来
+  for (let y = 0; y < 540; y += 36) 块(477, y, 6, 18);
+  const bx = 480 + 380 * Math.sin(t * 1.1), by = 270 + 200 * Math.sin(t * 1.7);
+  块(60, by - 40 + 30 * Math.sin(t * 2), 16, 80); 块(884, by - 40 - 20 * Math.sin(t * 1.5), 16, 80); 块(bx - 8, by - 8, 16, 16);
+  const 数 = ['111101101101111', '010110010010111', '111001111100111', '111001111001111'];
+  [[380, 1], [540, 3]].forEach(([x, n]) => [...数[n]].forEach((b, i) => { if (b === '1') 块(x + (i % 3) * 14, 30 + Math.floor(i / 3) * 14, 14, 14); }));
+  字('每个白块都是一行行扫描线拼出来的：没有一张图片', 20, 525, '#777'); }
+function 画1979(t) { g.fillStyle = '#000'; g.fillRect(0, 0, 960, 540); g.strokeStyle = '#cfe'; g.lineWidth = 1.6; g.shadowColor = '#9ff'; g.shadowBlur = 8;
+  const 线 = pts => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.stroke(); };
+  const r = 种子(5); for (let k = 0; k < 7; k++) { const cx = (r() * 960 + t * (20 + 40 * r()) * (r() < .5 ? -1 : 1) + 2000) % 960, cy = (r() * 540 + t * 25 * (r() - .5) + 1000) % 540, R0 = 20 + 40 * r(), n = 9, a0 = t * (r() - .5);
+    线(Array.from({length: n}, (_, i) => { const a = a0 + i / n * 6.283, rr = R0 * (.75 + .25 * r()); return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]; })); }
+  const a = t * .8; 线([[0, -18], [12, 14], [0, 8], [-12, 14]].map(([x, y]) => [480 + x * Math.cos(a) - y * Math.sin(a), 270 + x * Math.sin(a) + y * Math.cos(a)]));
+  g.shadowBlur = 0; 字('存的不是像素，是一串「从 (x1,y1) 画到 (x2,y2)」', 20, 525, '#777'); }
+function 画1984() { g.fillStyle = '#05050c'; g.fillRect(0, 0, 960, 540); const sr = 种子(77); for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(255,255,255,${sr() * .7})`; g.fillRect(sr() * 960, sr() * 540, 1.5, 1.5); }
+  const r = 种子(星系 * 1000 + 17), 音 = ['la', 've', 'ti', 'so', 'ra', 'qu', 'be', 'ar', 'on', 'di', 'xe', 'ma'];
+  for (let k = 0; k < 8; k++) { const cx = 90 + (k % 4) * 260, cy = 150 + Math.floor(k / 4) * 240, R0 = 30 + 50 * r(), hue = r() * 360, 带 = r() < .5, 环 = r() < .35, 名 = 音[r() * 12 | 0] + 音[r() * 12 | 0] + (r() < .5 ? 音[r() * 12 | 0] : '');
+    const gr = g.createRadialGradient(cx - R0 * .4, cy - R0 * .4, R0 * .1, cx, cy, R0); gr.addColorStop(0, `hsl(${hue},60%,70%)`); gr.addColorStop(1, `hsl(${hue},55%,18%)`);
+    if (环) { g.strokeStyle = `hsla(${hue + 40},50%,70%,.6)`; g.lineWidth = 4; g.beginPath(); g.ellipse(cx, cy, R0 * 1.7, R0 * .4, -.3, Math.PI, 2 * Math.PI); g.stroke(); }
+    g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, R0, 0, 7); g.fill();
+    if (带) { g.save(); g.clip(); g.fillStyle = `hsla(${hue + 30},60%,40%,.35)`; for (let b = -3; b <= 3; b += 2) g.fillRect(cx - R0, cy + b * R0 / 5, R0 * 2, R0 / 6); g.restore(); }
+    if (环) { g.strokeStyle = `hsla(${hue + 40},50%,70%,.8)`; g.lineWidth = 4; g.beginPath(); g.ellipse(cx, cy, R0 * 1.7, R0 * .4, -.3, 0, Math.PI); g.stroke(); }
+    字(名[0].toUpperCase() + 名.slice(1), cx - 24, cy + R0 + 38, '#ccd', 14); }
+  字(`第 ${星系} 星系：8 颗星球的大小、颜色、条纹、光环、名字，全部从数字 ${星系} 算出来，存起来只要 1 个字节`, 20, 525, '#999'); }
+const 小人 = { 戴: ['................', '.....RRRRRR.....', '....RRRRRRRR....', '...RRRRRRRRRR...', '....SSSSSSSS....', '....SBSSSSBS....', '....SSSSSSSS....', '....SBBBBBBS....', '.....SSSSSS.....', '...BBRRRRRRBB...', '..SBBRRRRRRBBS..', '..S.BBBBBBBB.S..', '....BBBBBBBB....', '....BB....BB....', '...RRR....RRR...', '................'],
+  不戴: ['................', '.....BBBBBB.....', '....BBBBBBBB....', '...BBBBBBBBBB...', '...BSSSSSSSSB...', '....SBSSSSBS....', '....SSSSSSSS....', '....SSSBBSSS....', '.....SSSSSS.....', '...RRRRRRRRRR...', '..SRRRRRRRRRRS..', '..S.RRRRRRRR.S..', '....RRRRRRRR....', '....RR....RR....', '...BBB....BBB...', '................'] };
+const 色 = {R: '#d8282a', S: '#f2b27a', B: '#7a4a12'};
+function 画像素(图, x0, y0, s, 格线) { 图.forEach((行, y) => [...行].forEach((c, x) => { if (c !== '.') { g.fillStyle = 色[c]; g.fillRect(x0 + x * s, y0 + y * s, s, s); } }));
+  if (格线) { g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 1; for (let k = 0; k <= 2; k++) { g.beginPath(); g.moveTo(x0 + k * 8 * s, y0); g.lineTo(x0 + k * 8 * s, y0 + 16 * s); g.moveTo(x0, y0 + k * 8 * s); g.lineTo(x0 + 16 * s, y0 + k * 8 * s); g.stroke(); } } }
+function 每块几色(图) { const r = []; for (let by = 0; by < 2; by++) for (let bx = 0; bx < 2; bx++) { const s = new Set(); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const c = 图[by * 8 + y][bx * 8 + x]; if (c !== '.') s.add(c); } r.push(s.size); } return r; }
+function 画1985() { g.fillStyle = '#5c94fc'; g.fillRect(0, 0, 960, 540); const 图 = 帽子 ? 小人.戴 : 小人.不戴;
+  g.fillStyle = '#c84c0c'; for (let x = 0; x < 960; x += 24) for (let y = 460; y < 540; y += 24) { g.fillRect(x + 1, y + 1, 22, 22); }
+  画像素(图, 60, 60, 22, true); 字('放大看（白线 = 8×8 的图块）', 60, 50, '#fff', 14);
+  画像素(图, 520, 380, 3, false); 画像素(图, 600, 380, 5, false); 字('电视上差不多这么大 →', 470, 370, '#fff', 14);
+  const n = 每块几色(图); 字(`四个图块各用了 ${n.join(' / ')} 种颜色（规定最多 3 种 + 透明）`, 470, 120, '#fff', 15);
+  字(帽子 ? '帽子遮住了画不清的头发；胡子让嘴不用动；背带裤让胳膊和身子分得开' : '没帽子：头发和脸混成一团；嘴只有一两个格子，看不出表情；胳膊和衣服一个颜色', 470, 150, '#fff', 15);
+  字('（自己画的示意小人，不是任何游戏的原图）', 470, 180, '#dde', 12); }
+// 早期 3D：低分辨率画布 + 每个三角形一次仿射贴图
+const 低 = document.createElement('canvas'); 低.width = 240; 低.height = 135; const lg = 低.getContext('2d');
+const 纹 = document.createElement('canvas'); 纹.width = 纹.height = 32; { const t = 纹.getContext('2d'); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { t.fillStyle = (x + y) % 2 ? '#c9a24a' : '#5a3c1a'; t.fillRect(x * 4, y * 4, 4, 4); } t.fillStyle = '#d33'; t.fillRect(13, 13, 6, 6); }
+function 贴三角(c, img, x0, y0, x1, y1, x2, y2, u0, v0, u1, v1, u2, v2) {
+  c.save(); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.lineTo(x2, y2); c.closePath(); c.clip();
+  const d = u0 * (v1 - v2) + u1 * (v2 - v0) + u2 * (v0 - v1); if (Math.abs(d) < 1e-9) { c.restore(); return; }
+  const a = (x0 * (v1 - v2) + x1 * (v2 - v0) + x2 * (v0 - v1)) / d, b = (y0 * (v1 - v2) + y1 * (v2 - v0) + y2 * (v0 - v1)) / d;
+  const cc = (x0 * (u2 - u1) + x1 * (u0 - u2) + x2 * (u1 - u0)) / d, dd = (y0 * (u2 - u1) + y1 * (u0 - u2) + y2 * (u1 - u0)) / d;
+  const e = (x0 * (u1 * v2 - u2 * v1) + x1 * (u2 * v0 - u0 * v2) + x2 * (u0 * v1 - u1 * v0)) / d, f = (y0 * (u1 * v2 - u2 * v1) + y1 * (u2 * v0 - u0 * v2) + y2 * (u0 * v1 - u1 * v0)) / d;
+  c.transform(a, b, cc, dd, e, f); c.drawImage(img, 0, 0); c.restore(); }
+function 画1996(t) { lg.fillStyle = '#203048'; lg.fillRect(0, 0, 240, 135); lg.fillStyle = '#3a5a3a'; lg.fillRect(0, 85, 240, 50);
+  const ay = t * .7, ax = .45 + .1 * Math.sin(t * .5); const 投 = ([x, y, z]) => { let X = x * Math.cos(ay) + z * Math.sin(ay), Z = -x * Math.sin(ay) + z * Math.cos(ay); let Y = y * Math.cos(ax) - Z * Math.sin(ax); Z = y * Math.sin(ax) + Z * Math.cos(ax) + 4.2;
+    let sx = 120 + X / Z * 150, sy = 70 - Y / Z * 150; if (抖) { sx = Math.round(sx); sy = Math.round(sy); } return [sx, sy, Z]; };
+  const V = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]];
+  const 面 = [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]];
+  const 片 = [];
+  for (const f of 面) { const n = 校正 ? 6 : 1; const P = (u, v) => { const [a, b, c, d] = f.map(i => V[i]); return [0, 1, 2].map(k => (a[k] * (1 - u) + b[k] * u) * (1 - v) + (d[k] * (1 - u) + c[k] * u) * v); };
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const q = [[i / n, j / n], [(i + 1) / n, j / n], [(i + 1) / n, (j + 1) / n], [i / n, (j + 1) / n]].map(([u, v]) => [...投(P(u, v)), u * 32, v * 32]);
+      const cross = (q[1][0] - q[0][0]) * (q[2][1] - q[0][1]) - (q[1][1] - q[0][1]) * (q[2][0] - q[0][0]); if (cross > 0) continue;
+      片.push([(q[0][2] + q[2][2]) / 2, q]); } }
+  片.sort((a, b) => b[0] - a[0]);
+  for (const [, q] of 片) { 贴三角(lg, 纹, q[0][0], q[0][1], q[1][0], q[1][1], q[2][0], q[2][1], q[0][3], q[0][4], q[1][3], q[1][4], q[2][3], q[2][4]); 贴三角(lg, 纹, q[0][0], q[0][1], q[2][0], q[2][1], q[3][0], q[3][1], q[0][3], q[0][4], q[2][3], q[2][4], q[3][3], q[3][4]); }
+  g.imageSmoothingEnabled = false; g.drawImage(低, 0, 0, 960, 540); g.imageSmoothingEnabled = true;
+  字(`240×135 画好再放大 4 倍；${抖 ? '顶点吸在整数像素上 → 边一跳一跳' : '顶点有小数 → 边很稳'}；${校正 ? '每个面切成 6×6 小块 → 格子不歪' : '一个面只贴两次（仿射）→ 斜着看格子会折'}`, 20, 525, '#ddd'); }
+let 贴图缓存 = null;
+function 现算贴图() { const W = 200, out = []; const r = 种子(贴种); const 偏 = [r() * 50, r() * 50, r() * 50];
+  const h = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7 + 偏[2]) * 43758.5453; return v - Math.floor(v); };
+  const nz = (x, y) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy); return (h(ix, iy) * (1 - ux) + h(ix + 1, iy) * ux) * (1 - uy) + (h(ix, iy + 1) * (1 - ux) + h(ix + 1, iy + 1) * ux) * uy; };
+  const fb = (x, y) => { let s = 0, a = .5; for (let o = 0; o < 5; o++) { s += a * nz(x, y); x *= 2; y *= 2; a *= .5; } return s; };
+  const 公式 = [
+    (x, y) => { const d = Math.hypot(x - .3 - 偏[0] % 1 * .2, y * .25 + .5) * 18 + fb(x * 4, y * 16) * 6; const k = .5 + .5 * Math.sin(d); return [120 + 80 * k, 70 + 45 * k, 30 + 20 * k]; },
+    (x, y) => { const v = .5 + .5 * Math.sin((x + y) * 10 + fb(x * 5 + 偏[1], y * 5) * 9); const k = Math.pow(v, .4); return [235 * k + 20, 232 * k + 20, 228 * k + 25]; },
+    (x, y) => { const 行 = Math.floor(y * 8), xx = x * 4 + (行 % 2) * .5, 缝 = Math.min(Math.abs(xx - Math.round(xx)), Math.abs(y * 8 - Math.round(y * 8)) * .5) < .035; const n = fb(x * 20, y * 20); return 缝 ? [190, 185, 175] : [150 + 60 * n, 60 + 30 * n, 40 + 20 * n]; },
+  ];
+  for (const f of 公式) { const c = document.createElement('canvas'); c.width = c.height = W; const t = c.getContext('2d'), im = t.createImageData(W, W);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) { const [R, G, B] = f(x / W, y / W), i = (y * W + x) * 4; im.data[i] = R; im.data[i + 1] = G; im.data[i + 2] = B; im.data[i + 3] = 255; } t.putImageData(im, 0, 0); out.push(c); }
+  return out; }
+function 画2004() { g.fillStyle = '#16151c'; g.fillRect(0, 0, 960, 540); if (!贴图缓存) 贴图缓存 = 现算贴图();
+  ['木纹：sin(到圆心的距离 + 噪声)', '大理石：sin(x + y + 噪声×9)', '砖墙：错开的格子 + 噪声'].forEach((n, i) => { g.drawImage(贴图缓存[i], 50 + i * 300, 90, 260, 260); 字(n, 50 + i * 300, 380, '#ddd', 14); });
+  字('三张 200×200 的贴图，存成图片要 3 × 117 KB；用公式现算，只要上面这三行', 50, 60, '#ffc84a', 16);
+  字('代价：要算，开机会慢一点；好处：放大也不会糊，换个随机数就是一张新的', 50, 430, '#999', 14); }
+const 画C = [画1972, 画1979, 画1984, 画1985, 画1996, 画2004];
+
+// ---------- 循环 ----------
+let 开始 = performance.now(), 上 = 开始;
+function 帧(now) { const t = (now - 开始) / 1000; 上 = now;
+  if (当前标签 === 'A' && 显A && !显A.gl.isContextLost()) { if (要画 || $('aMove').checked && A条 >= A条数) { A条 = 0; A时 = t; }
+    if (A条 < A条数) { 设A(A时); 画A条(A条++); } }
+  if (当前标签 === 'B' && (要画 || 步 === 3 || 步 === 5 || 步 === 6 || 步 === 8)) 画B(t);
+  if (当前标签 === 'C' && (要画 || 代 <= 1 || 代 === 4)) 画C[代](t);
+  要画 = false; requestAnimationFrame(帧); }
+requestAnimationFrame(帧);
+</script>
+</body>
+</html>
